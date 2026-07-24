@@ -1,0 +1,53 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+.yarn/
+.yarn-cache/
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+*.log
+
+# Build output
+dist/
+build/
+.next/
+out/
+coverage/
+.cache/
+.parcel-cache/
+.vite/
+.tmp/
+tmp/
+
+# TypeScript
+*.tsbuildinfo
+
+# OS / editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Local-only files
+*.local
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+
+# Runtime state: projects, exports, local B2 cache
+.data/
+
+# Built single-file canvas (regenerate with `npm run build`)
+frontend/index.html
