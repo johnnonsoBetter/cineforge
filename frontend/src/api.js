@@ -10,14 +10,14 @@ export async function getHealth() {
   return r.json();
 }
 
-export async function createProject(idea, settings, gateMode) {
+export async function createProject(idea, settings) {
   const r = await fetch('/api/projects', {
     method: 'POST',
     headers: JSON_HEADERS,
-    body: JSON.stringify({ idea, settings: settings || null, gate_mode: gateMode || null }),
+    body: JSON.stringify({ idea, settings: settings || null }),
   });
   if (!r.ok) throw new Error('could not create project');
-  return r.json(); // { project_id, gate_mode }
+  return r.json(); // { project_id }
 }
 
 // Stream any SSE endpoint, calling onEvent(parsedEvent) per frame.
@@ -57,14 +57,10 @@ async function streamSSE(url, { method = 'GET', body } = {}, onEvent, signal) {
 }
 
 // The staged run. Called with no arguments this both starts a film and continues one —
-// stages that already cleared their gate are skipped — so after approving a gate the
-// client's whole job is to call this again.
-export function streamRun(projectId, onEvent, signal, { stopAfter, gateMode } = {}) {
-  const q = new URLSearchParams();
-  if (stopAfter) q.set('stop_after', stopAfter);
-  if (gateMode) q.set('gate_mode', gateMode);
-  const qs = q.toString();
-  return streamSSE(`/api/projects/${projectId}/run${qs ? `?${qs}` : ''}`, {}, onEvent, signal);
+// the pass that already cleared its gate is skipped — so after approving a gate the
+// client's whole job is to call this again. Every pass stops for the director.
+export function streamRun(projectId, onEvent, signal) {
+  return streamSSE(`/api/projects/${projectId}/run`, {}, onEvent, signal);
 }
 
 // The stage board — what is done, what is open, and what the run is waiting on.
@@ -214,5 +210,33 @@ export function streamEdit(projectId, instruction, targetNodeId, onEvent, signal
   return streamSSE('/api/edit', {
     method: 'POST',
     body: { project_id: projectId, instruction, target_node_id: targetNodeId || null },
+  }, onEvent, signal);
+}
+
+// Read a note against the graph and describe the change — writes nothing. The answer is a
+// proposal the composer shows above the input for the director to approve, tweak or drop.
+export async function proposeEdit(projectId, instruction, targetNodeId) {
+  const r = await fetch('/api/edit/propose', {
+    method: 'POST',
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ project_id: projectId, instruction, target_node_id: targetNodeId || null }),
+  });
+  if (!r.ok) throw new Error('could not read that note');
+  return r.json();
+}
+
+// Execute an approved proposal. The only half of an edit that writes or spends a render.
+export function applyEdit(projectId, proposal, onEvent, signal) {
+  return streamSSE('/api/edit/apply', {
+    method: 'POST',
+    body: {
+      project_id: projectId,
+      target_node_id: proposal.target.node_id,
+      change: proposal.change,
+      field: proposal.field || null,
+      to: proposal.to ?? null,
+      note: proposal.note || null,
+      new_name: proposal.new_name || null,
+    },
   }, onEvent, signal);
 }

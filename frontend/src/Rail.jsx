@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import Monitor from './Monitor.jsx';
 import GateCard from './GateCard.jsx';
+import EditProposal from './EditProposal.jsx';
 import MentionMenu from './MentionMenu.jsx';
 import { KIND_LABEL } from './ui.js';
 import {
@@ -10,7 +11,8 @@ import {
 // The Creative Director conversation. Streams stage lines while the pipeline runs,
 // keeps the director/user turns, and hosts the conversational-edit composer.
 export default function Rail({ messages, canEdit, nodes, targetNode, onClearTarget, onFocusNode,
-                               onSend, busy, progress, current, stages, openGate,
+                               onPropose, proposal, onApplyProposal, onDiscardProposal,
+                               busy, progress, current, stages, openGate,
                                onApproveStage, onHoldStage }) {
   const [draft, setDraft] = useState('');
   const [caret, setCaret] = useState(0);
@@ -114,10 +116,12 @@ export default function Rail({ messages, canEdit, nodes, targetNode, onClearTarg
     write(`${draft.slice(0, at)}${pad}@${draft.slice(at)}`, at + pad.length + 1);
   };
 
+  // Sending doesn't apply the note — it proposes it. The draft clears because the note is now
+  // captured in the proposal card above, where it can be read, tweaked or dropped.
   const send = () => {
     const text = draft.trim();
     if (!text || busy) return;
-    onSend(text, liveRefs(text, refs));
+    onPropose(text, liveRefs(text, refs));
     setDraft('');
     setRefs([]);
     setScopeId(null);
@@ -212,6 +216,18 @@ export default function Rail({ messages, canEdit, nodes, targetNode, onClearTarg
               </button>
             ))}
           </div>
+        )}
+
+        {/* The note doesn't fire — it lands here as a proposal, above the input it came from,
+            and waits for the director to approve, edit or drop it. */}
+        {proposal && (
+          <EditProposal
+            proposal={proposal}
+            busy={busy}
+            onApply={onApplyProposal}
+            onDiscard={onDiscardProposal}
+            onFocusNode={onFocusNode}
+          />
         )}
 
         <div className="composer-wrap">

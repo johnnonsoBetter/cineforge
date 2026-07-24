@@ -96,6 +96,16 @@ def resolve_deep(value, names: dict[str, str]):
     return _map_strings(value, lambda t: resolve(t, names))
 
 
+def tokenize_deep(value, names: dict[str, str]):
+    """Tokenise entity names through a nested structure — the inverse of resolve_deep.
+
+    A generation unit added at the canvas (another angle on an existing scene) is written
+    from real names, so it has to be tokenised the same way the planned coverage was before
+    it joins the scene — otherwise a later rename would reach every unit but that one.
+    """
+    return _map_strings(value, lambda t: tokenize(t, names))
+
+
 def _tokens_deep(value) -> set[str]:
     """Every entity token inside a possibly-nested field."""
     found: set[str] = set()

@@ -73,11 +73,10 @@ def health():
 @app.post("/api/projects")
 def create_project(req: models.CreateProjectRequest):
     p = models.Project(idea=req.idea, title=req.title or "Untitled Film",
-                       settings=req.settings or models.ProjectSettings(),
-                       gate_mode=req.gate_mode or models.GateMode.AUTO)
+                       settings=req.settings or models.ProjectSettings())
     p.ensure_stages()
     storage.save(p)
-    return {"project_id": p.project_id, "gate_mode": p.gate_mode.value}
+    return {"project_id": p.project_id}
 
 
 @app.get("/api/projects/{project_id}")
@@ -102,20 +101,15 @@ def stages(project_id: str):
 
 
 @app.get("/api/projects/{project_id}/run")
-def run(project_id: str,
-        stop_after: str | None = Query(None),
-        gate_mode: models.GateMode | None = Query(None)):
-    """SSE — run stage by stage, stopping at the first gate that needs a human.
+def run(project_id: str):
+    """SSE — run one pass, then stop at its gate.
 
-    Called with no arguments this both starts a film and continues one: stages that already
+    Called with no arguments this both starts a film and continues one: passes that already
     cleared are skipped, so the client's job after approving a gate is simply to call this
-    again. `stop_after` ends the run at a named stage even when its gate cleared —
-    `stop_after=keyframes` is the cheap storyboard pass, before anything is animated.
+    again. Every pass stops for the director — there is no run that flows through on its own.
     """
     p = _require(project_id)
-    if stop_after and stop_after not in models.STAGE_KEYS:
-        raise HTTPException(400, f"unknown stage: {stop_after}")
-    return _sse(director.run(p, stop_after=stop_after, gate_mode=gate_mode), p)
+    return _sse(director.run(p), p)
 
 
 @app.post("/api/stages/approve")
@@ -145,22 +139,45 @@ def hold_stage(req: models.StageDecisionRequest):
 
 
 @app.get("/api/projects/{project_id}/generate")
-def generate(project_id: str, mode: str = Query("full", pattern="^(draft|full)$")):
-    """SSE — the whole film in one call, for clients that don't drive the gates themselves.
+def generate(project_id: str):
+    """SSE — an alias of `/run`, kept for clients that reach for the older name.
 
-    Kept as the shorthand it always was: it runs the same staged pipeline, and `mode=draft`
-    is now simply "stop after the storyboards". It still halts at any gate that needs a
-    human — a one-call API is not a reason to spend the next stage's budget on a pass the
-    reviewer rejected.
+    There is no whole-film-in-one-call anymore: every pass stops at its gate, so this runs
+    exactly one pass and hands the decision back, same as `/run`.
     """
     p = _require(project_id)
-    return _sse(director.run(p, stop_after="keyframes" if mode == "draft" else None), p)
+    return _sse(director.run(p), p)
 
 
 @app.post("/api/edit")
 def edit(req: models.EditRequest):
     p = _require(req.project_id)
     return _sse(director.run_edit(p, req.instruction, req.target_node_id), p)
+
+
+@app.post("/api/edit/propose")
+def propose_edit(req: models.EditRequest):
+    """Read a note against the graph and describe the change — writing nothing.
+
+    The composer shows the result above the input: the target, the field diff, and what it
+    would cost. Approving it posts to `/api/edit/apply`. This is the first half of every
+    conversational edit, and the half that spends nothing.
+    """
+    p = _require(req.project_id)
+    return director.propose_edit(p, req.instruction, req.target_node_id)
+
+
+@app.post("/api/edit/apply")
+def apply_edit(req: models.ApplyEditRequest):
+    """SSE — execute a proposal the director approved. The only half that writes.
+
+    Regenerates the target and everything connected to it when something has been rendered;
+    updates the bible text and spends nothing when it hasn't. Impact is re-derived here, so
+    a proposal that aged between proposing and approving does the right thing rather than the
+    proposed thing.
+    """
+    p = _require(req.project_id)
+    return _sse(director.apply_edit(p, req), p)
 
 
 @app.post("/api/regenerate")

@@ -334,10 +334,32 @@ class CreateProjectRequest(BaseModel):
 
 
 class EditRequest(BaseModel):
-    """Conversational edit, e.g. 'make the ending more emotional'."""
+    """Conversational edit, e.g. 'make the ending more emotional'.
+
+    Also the body for `/api/edit/propose`: the same note and target, answered with a
+    Proposal the director can look at before anything is written or re-rendered.
+    """
     project_id: str
     instruction: str
     target_node_id: Optional[str] = None
+
+
+class ApplyEditRequest(BaseModel):
+    """Execute a proposal the director approved at the composer.
+
+    Only the fields apply actually acts on are round-tripped — the rest of the proposal was
+    the director's to read, not the server's to trust. Impact and cost are re-derived from
+    the graph at apply time, so a proposal that went stale between proposing and applying
+    changes what happens rather than lying about it. `to` may differ from the proposed value
+    because the card lets the director edit it before approving.
+    """
+    project_id: str
+    target_node_id: str
+    change: str                          # "rename" | "field" | "note"
+    field: Optional[str] = None          # field edits only: "dna" | "desc" | "action"
+    to: Optional[str] = None             # field edits only: the approved new value
+    note: Optional[str] = None           # note edits: the instruction to fold into the prompt
+    new_name: Optional[str] = None       # rename only
 
 
 class RegenerateRequest(BaseModel):

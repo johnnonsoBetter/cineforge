@@ -1983,6 +1983,116 @@ button:disabled { cursor: default; }
   color: var(--faint);
 }
 
+/* The proposed edit — the working surface a note lands on, above the composer it came from.
+   Shares the gate card's vocabulary because it does the same job: it stops, shows what would
+   happen, and waits to be approved. */
+.proposal {
+  margin-bottom: 12px;
+  border: 1px solid var(--gold-dim);
+  border-radius: 13px;
+  background: rgba(228, 165, 85, 0.06);
+  padding: 12px 13px 11px;
+  animation: rise 0.34s cubic-bezier(0.2, 0.8, 0.25, 1);
+}
+
+.proposal-head { display: flex; align-items: center; gap: 8px; margin-bottom: 9px; }
+.proposal-kind {
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--gold);
+  border: 1px solid var(--gold-dim);
+  border-radius: 5px;
+  padding: 2px 6px;
+}
+.proposal-target {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--cream);
+}
+.proposal-target:hover { color: var(--gold); }
+.proposal-target em {
+  font-style: normal;
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.proposal-x { margin-left: auto; color: var(--faint); font-size: 12px; padding: 2px 4px; }
+.proposal-x:hover { color: var(--cream); }
+
+/* A rename is a clean before/after — no box, nothing to render. */
+.proposal-rename {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 14px;
+  padding: 3px 1px 5px;
+}
+.proposal-from { color: var(--faint); text-decoration: line-through; }
+.proposal-arrow { color: var(--gold); }
+.proposal-to { color: var(--cream); }
+
+/* The current field value, struck through above the box that will replace it. */
+.proposal-was {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--faint);
+  text-decoration: line-through;
+  margin-bottom: 6px;
+}
+.proposal-edit {
+  width: 100%;
+  resize: none;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.24);
+  color: var(--cream);
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  padding: 8px 9px;
+}
+.proposal-edit:focus { outline: none; border-color: var(--gold-dim); }
+
+.proposal-cost {
+  margin-top: 9px;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text);
+}
+
+.proposal-stale { list-style: none; margin: 7px 0 0; padding: 0; display: grid; gap: 4px; }
+.proposal-stale button {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  width: 100%;
+  text-align: left;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.18);
+  padding: 5px 9px;
+  font-size: 12px;
+  color: var(--cream);
+}
+.proposal-stale button:hover { border-color: var(--gold-dim); }
+.proposal-stale em {
+  font-style: normal;
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--amber);
+}
+
+.proposal-actions { display: flex; gap: 8px; margin-top: 11px; }
+.proposal-actions .btn-gold { flex: 1; }
+
 /* The gate speaking in the conversation, alongside the reviewer's per-asset voice. */
 .msg-gate {
   align-self: flex-start;

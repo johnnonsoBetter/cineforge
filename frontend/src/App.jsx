@@ -45,10 +45,9 @@ function Studio() {
     api.getQC(id).then(setLedger).catch(() => {});
   }, [projectId]);
   const [exportUrl, setExportUrl] = useState(null);
-  const [mode, setMode] = useState('full');           // 'draft' = keyframes only
   const [stages, setStages] = useState(seedStages()); // the stage board
-  const [gateMode, setGateMode] = useState('auto');   // who opens the next stage
   const [impact, setImpact] = useState(null);         // blast radius of changing the selection
+  const [proposal, setProposal] = useState(null);     // a proposed edit, awaiting approval
   const [progress, setProgress] = useState({});       // stage key -> { done, total }
   const [menu, setMenu] = useState(null);             // { x, y, nodeId }
   const [shotAt, setShotAt] = useState(null);         // { node, x, y } — new-setup dialog
@@ -134,7 +133,7 @@ function Studio() {
       await api.streamRun(pid, (ev) => {
         handleEvent(ev);
         if (ev.type === 'node' && first) { first = false; fitSoon(); }
-      }, ctrl.signal, { stopAfter: mode === 'draft' ? 'keyframes' : undefined, gateMode });
+      }, ctrl.signal);
       const board = await api.getStages(pid);
       setStages(board.stages);
       setBuilt(board.complete);
@@ -147,7 +146,7 @@ function Studio() {
       setBusy(false);
       abortRef.current = null;
     }
-  }, [handleEvent, fitSoon, pushMsg, mode, gateMode, loadReferences, loadLedger]);
+  }, [handleEvent, fitSoon, pushMsg, loadReferences, loadLedger]);
 
   // ---- forge a new film ----
   const forge = useCallback(async (idea, settings) => {
@@ -159,13 +158,13 @@ function Studio() {
     setLastSettings(settings || null);
     setMessages((m) => [...m, mkMsg('user', idea)]);
     try {
-      const { project_id } = await api.createProject(idea, settings, gateMode);
+      const { project_id } = await api.createProject(idea, settings);
       setProjectId(project_id);
       await runFrom(project_id);
     } catch (e) {
       pushMsg('error', `Something interrupted the forge: ${e.message}`);
     }
-  }, [runFrom, pushMsg, gateMode]);
+  }, [runFrom, pushMsg]);
 
   // ---- open a gate, and let the next stage start ----
   const approveStage = useCallback(async (key, note) => {
@@ -293,15 +292,29 @@ function Studio() {
   // No selection required: the backend's intent router reads the note against the graph
   // and works out what you meant. An @-reference in the note wins over both, because it is
   // the one signal the director stated outright; a selection is the next best thing.
-  const sendEdit = useCallback(async (instruction, refs = []) => {
+  // A note doesn't apply — it proposes. The director reads the proposal above the input and
+  // approves, edits or drops it; nothing is written or re-rendered until they do.
+  const proposeEdit = useCallback(async (instruction, refs = []) => {
+    if (!projectId || busy) return;
+    pushMsg('user', instruction);
+    const target = refs[0]?.nodeId || selectedId;
+    try {
+      const p = await api.proposeEdit(projectId, instruction, target);
+      if (p.ok) setProposal(p);
+      else pushMsg('error', p.reason || "I couldn't work out what that note meant.");
+    } catch (e) {
+      pushMsg('error', `I couldn't read that note: ${e.message}`);
+    }
+  }, [projectId, busy, selectedId, pushMsg]);
+
+  const applyProposal = useCallback(async (p) => {
     if (!projectId || busy) return;
     setBusy(true);
-    pushMsg('user', instruction);
+    setProposal(null);
     try {
       const ctrl = new AbortController();
       abortRef.current = ctrl;
-      const target = refs[0]?.nodeId || selectedId;
-      await api.streamEdit(projectId, instruction, target, handleEvent, ctrl.signal);
+      await api.applyEdit(projectId, p, handleEvent, ctrl.signal);
       loadReferences();
     } catch (e) {
       if (e.name !== 'AbortError') pushMsg('error', `That edit failed: ${e.message}`);
@@ -309,7 +322,9 @@ function Studio() {
       setBusy(false);
       abortRef.current = null;
     }
-  }, [projectId, busy, selectedId, handleEvent, pushMsg, loadReferences]);
+  }, [projectId, busy, handleEvent, pushMsg, loadReferences]);
+
+  const discardProposal = useCallback(() => setProposal(null), []);
 
   // ---- rename an entity (free: nothing is re-rendered) ----
   const renameEntity = useCallback(async (entityId, newName) => {
@@ -476,25 +491,6 @@ function Studio() {
             <span className="dot" style={{ background: health?.media_live ? 'var(--gold)' : 'var(--faint)' }} />
             {health ? (health.media_live ? `Media · ${health.provider_stack}` : 'Media · mock') : '…'}
           </span>
-          {!hasGraph && (
-            <button className="btn" title="Draft renders keyframes only — fast and cheap"
-                    onClick={() => setMode((m) => (m === 'full' ? 'draft' : 'full'))}>
-              {mode === 'full' ? 'Full render' : 'Draft only'}
-            </button>
-          )}
-          {/* Who opens the next stage. Switchable mid-film on purpose: the usual shape of a
-              run is hand-approving the cheap early passes and then letting the reviewer
-              carry the expensive ones once the look is settled. */}
-          <button
-            className="btn"
-            title={gateMode === 'auto'
-              ? 'QC opens each stage on its own, and stops the run when something fails'
-              : 'Every stage waits for you before the next one starts'}
-            onClick={() => setGateMode((g) => (g === 'auto' ? 'manual' : 'auto'))}
-            disabled={busy}
-          >
-            {gateMode === 'auto' ? 'Gates · AI' : 'Gates · manual'}
-          </button>
           {/* The gate's headline number belongs in the chrome: how much still needs a human
               is a fact about the film, not a detail inside one node. */}
           {ledger && ledger.reviewed > 0 && (
@@ -540,7 +536,10 @@ function Studio() {
           targetNode={selectedNode && ['character', 'environment', 'scene', 'keyframe', 'shot'].includes(selectedNode.kind) ? selectedNode : null}
           onClearTarget={() => setSelectedId(null)}
           onFocusNode={setSelectedId}
-          onSend={sendEdit}
+          onPropose={proposeEdit}
+          proposal={proposal}
+          onApplyProposal={applyProposal}
+          onDiscardProposal={discardProposal}
           busy={busy}
           progress={progress}
           current={currentStage}

@@ -251,7 +251,7 @@ def _add_vo(project: Project, shot: Node, line: str) -> Iterator[StageEvent]:
     if not line:
         return
     try:
-        res = gb.tts(line)
+        res = gb.tts(entities.resolve(line, project.entity_names()))
     except Exception:
         return
     if res.url and not res.url.startswith("mock://"):
@@ -262,9 +262,9 @@ def _add_vo(project: Project, shot: Node, line: str) -> Iterator[StageEvent]:
 
 # ---- the stages ------------------------------------------------------------
 #
-# The film is not built in one sweep. It is built in passes, each of which is a thing a
-# director would want to look at before paying for the next one: the story, then the cast,
-# then the locations, then the breakdown, then the frames, then the motion, then the cut.
+# The film is not built in one sweep. It is built in four passes, each of which is a thing a
+# director would want to look at before paying for the next one: the plan, then the founding
+# references, then the frames, then the motion.
 #
 # Every stage reads its inputs off the graph rather than off a local variable, and builds
 # only what is missing. That is what lets a stage be re-entered — an hour later, after a
@@ -286,130 +286,78 @@ def _plan(project: Project) -> dict:
     return (n.data.get("plan") if n else None) or {}
 
 
-def _scene_node_for(project: Project, n: object) -> Node | None:
-    return next((s for s in project.by_kind(NodeKind.SCENE) if s.data.get("n") == n), None)
+def _units(project: Project) -> Iterator[tuple[Node, dict, int, dict]]:
+    """Every generation unit in the film, in film order.
+
+    A unit is one coverage entry: one still, then one clip animated from that exact still.
+    It is the atom the last two stages walk, so both walk *this* rather than each rederiving
+    what a unit is.
+    """
+    for scene_node in project.by_kind(NodeKind.SCENE):
+        scene = scene_node.data
+        for i, unit in enumerate(scene.get("coverage") or []):
+            yield scene_node, scene, i, unit
 
 
-def _keyframe_of(project: Project, scene_node: Node) -> Node | None:
+def _keyframe_for(project: Project, scene_node: Node, i: int) -> Node | None:
     return next((c for c in project.children_of(scene_node.node_id)
-                 if c.kind == NodeKind.KEYFRAME), None)
+                 if c.kind == NodeKind.KEYFRAME and c.data.get("i") == i), None)
 
 
-def stage_story(project: Project) -> Iterator[StageEvent]:
-    """Write the film: logline, bible, beats, cast, locations, scene breakdown."""
+def _shot_of(project: Project, keyframe: Node) -> Node | None:
+    return next((c for c in project.children_of(keyframe.node_id)
+                 if c.kind == NodeKind.SHOT), None)
+
+
+def stage_synthesis(project: Project) -> Iterator[StageEvent]:
+    """Write the film — and every prompt the three generation passes will spend.
+
+    The only creative pass, and the only one whose gate is about words. Cast, locations and
+    scenes all land on the canvas here as text, unrendered: the whole shape of the film
+    stands in front of the director before a single image has been paid for.
+    """
     pid = project.project_id
     if _story_node(project):
         return   # the film is already written; re-entering this stage must not rewrite it
 
-    yield _ev(label="Understanding the story…", project_id=pid)
-    yield _progress("story", 0, 1, pid)
+    yield _ev(label="Writing the film…", project_id=pid)
+    yield _progress("synthesis", 0, 1, pid)
     cfgp = project.settings
     plan = entities.tokenize_plan(story_agent.plan(project.idea, cfgp))
     project.title = plan.get("title", project.title)
     project.story_source = plan.get("_source", "sample")
     # The chosen preset leads; whatever the story agent wrote follows it.
     style = story_agent.style_block(cfgp.style_preset, plan.get("style", ""))
+    # Anything synthesis left blank is composed now, so that after this line every entity and
+    # every unit in the plan carries a complete prompt and nothing downstream invents one.
+    plan = camera.ensure_prompts(plan, style)
 
-    node = project.add(Node(kind=NodeKind.STORY, title=project.title,
-                            status=NodeStatus.READY,
-                            data={"style": style, "logline": project.idea,
-                                  "source": project.story_source,
-                                  "bible": plan.get("bible", {}),
-                                  "beats": plan.get("beats", []),
-                                  "plan": plan}))
-    yield _ev(type="node", node=node, project_id=pid)
-    yield _progress("story", 1, 1, pid)
+    story = project.add(Node(kind=NodeKind.STORY, title=project.title,
+                             status=NodeStatus.READY,
+                             data={"style": style, "logline": project.idea,
+                                   "source": project.story_source,
+                                   "bible": plan.get("bible", {}),
+                                   "beats": plan.get("beats", []),
+                                   "plan": plan}))
+    yield _ev(type="node", node=story, project_id=pid)
 
-
-def stage_characters(project: Project) -> Iterator[StageEvent]:
-    """The founding reference sheets — gated hardest, because everything inherits them.
-
-    A wrong sheet is not one bad frame; it is a whole film of the wrong person. This is the
-    stage most worth stopping after.
-    """
-    pid = project.project_id
-    story = _story_node(project)
-    if not story:
-        return
-    style, aspect = _style_of(project), project.settings.aspect
-    cast = _plan(project).get("characters", [])
-    todo = [c for c in cast if not project.entity_node(c["id"])]
-    if not todo:
-        return
-
-    yield _ev(label="Designing the characters…", project_id=pid)
-    done = len(cast) - len(todo)
-    yield _progress("characters", done, len(cast), pid)
-    for c in todo:
+    for c in plan.get("characters", []):
         n = project.add(Node(kind=NodeKind.CHARACTER, title=c["name"],
-                             status=NodeStatus.RUNNING, parent_ids=[story.node_id],
-                             data={"id": c["id"], "dna": c.get("dna", "")}))
+                             status=NodeStatus.PENDING, parent_ids=[story.node_id],
+                             data={"id": c["id"], "dna": c.get("dna", ""),
+                                   "prompt": c.get("sheet_prompt", "")}))
         yield _ev(type="node", node=n, project_id=pid)
-        with _safe(n, "character sheet"):
-            asset, report, attempt = yield from _gated(
-                n, NodeKind.CHARACTER,
-                lambda a: gb.generate_image(_char_prompt(style, c.get("dna", "")),
-                                            seed=f"{c['id']}-{a}", aspect_ratio=aspect),
-                _target_for(project, n), cfg.QC_MAX_REGENS, pid)
-            _settle(n, asset, report, attempt)
-        done += 1
-        yield _ev(type="node", node=n, project_id=pid)
-        yield _progress("characters", done, len(cast), pid)
 
-
-def stage_environments(project: Project) -> Iterator[StageEvent]:
-    """The establishing plates every scene is staged inside."""
-    pid = project.project_id
-    story = _story_node(project)
-    if not story:
-        return
-    style, aspect = _style_of(project), project.settings.aspect
-    places = _plan(project).get("environments", [])
-    todo = [e for e in places if not project.entity_node(e["id"])]
-    if not todo:
-        return
-
-    yield _ev(label="Creating the locations…", project_id=pid)
-    done = len(places) - len(todo)
-    yield _progress("environments", done, len(places), pid)
-    for e in todo:
-        desc = e.get("desc", e.get("name", ""))
+    for e in plan.get("environments", []):
         n = project.add(Node(kind=NodeKind.ENVIRONMENT, title=e["name"],
-                             status=NodeStatus.RUNNING, parent_ids=[story.node_id],
-                             data={"id": e["id"], "desc": desc}))
+                             status=NodeStatus.PENDING, parent_ids=[story.node_id],
+                             data={"id": e["id"], "desc": e.get("desc", ""),
+                                   "prompt": e.get("plate_prompt", "")}))
         yield _ev(type="node", node=n, project_id=pid)
-        with _safe(n, "environment plate"):
-            asset, report, attempt = yield from _gated(
-                n, NodeKind.ENVIRONMENT,
-                lambda a: gb.generate_image(_env_prompt(style, desc),
-                                            seed=f"{e['id']}-{a}", aspect_ratio=aspect),
-                _target_for(project, n), cfg.QC_MAX_REGENS, pid)
-            _settle(n, asset, report, attempt)
-        done += 1
-        yield _ev(type="node", node=n, project_id=pid)
-        yield _progress("environments", done, len(places), pid)
 
-
-def stage_scenes(project: Project) -> Iterator[StageEvent]:
-    """Hang the breakdown off the cast and locations it was written for.
-
-    The cheapest stage and the most valuable gate: this is the last point where changing
-    your mind costs a text call rather than a render.
-    """
-    pid = project.project_id
-    story = _story_node(project)
-    if not story:
-        return
-    scenes = _plan(project).get("scenes", [])
-    if not scenes:
-        return
-
-    done = sum(1 for s in scenes if _scene_node_for(project, s["n"]))
-    yield _progress("scenes", done, len(scenes), pid)
-    for scene in scenes:
-        if _scene_node_for(project, scene["n"]):
-            continue
-        yield _ev(label=f"Building scene {scene['n']}: {scene.get('title','')}…", project_id=pid)
+    for scene in plan.get("scenes", []):
+        # Hung off the cast and location it was written for, so every later stage reads a
+        # scene's DNA blocks and its plate straight off the graph.
         parents = [story.node_id]
         for cid in scene.get("character_ids", []):
             c = project.entity_node(cid)
@@ -418,118 +366,152 @@ def stage_scenes(project: Project) -> Iterator[StageEvent]:
         env = project.entity_node(scene.get("environment_id"))
         if env:
             parents.append(env.node_id)
-
-        node = project.add(Node(
+        n = project.add(Node(
             kind=NodeKind.SCENE, title=f"Scene {scene['n']}: {scene.get('title','')}",
             status=NodeStatus.READY, parent_ids=parents, data=scene))
+        yield _ev(type="node", node=n, project_id=pid)
+
+    yield _progress("synthesis", 1, 1, pid)
+
+
+def stage_sheets(project: Project) -> Iterator[StageEvent]:
+    """The founding references — every character sheet and every location plate.
+
+    Gated hardest, because everything inherits them. A wrong sheet is not one bad frame; it
+    is a whole film of the wrong person. This is the pass most worth stopping after.
+    """
+    pid = project.project_id
+    aspect = project.settings.aspect
+    founding = project.by_kind(NodeKind.CHARACTER) + project.by_kind(NodeKind.ENVIRONMENT)
+    todo = [n for n in founding if not n.asset]
+    if not todo:
+        return
+
+    yield _ev(label="Rendering the reference sheets…", project_id=pid)
+    done = len(founding) - len(todo)
+    yield _progress("sheets", done, len(founding), pid)
+    for n in todo:
+        what = "character sheet" if n.kind == NodeKind.CHARACTER else "location plate"
+        yield _ev(label=f"Designing {n.title}…", project_id=pid)
+        n.status = NodeStatus.RUNNING
+        yield _ev(type="node", node=n, project_id=pid)
+        with _safe(n, what):
+            prompt, seed = _prompt_of(project, n), n.data.get("id", n.node_id)
+            asset, report, attempt = yield from _gated(
+                n, n.kind,
+                lambda a: gb.generate_image(prompt, seed=f"{seed}-{a}", aspect_ratio=aspect),
+                _target_for(project, n), cfg.QC_MAX_REGENS, pid)
+            _settle(n, asset, report, attempt)
         done += 1
-        yield _ev(type="node", node=node, project_id=pid)
-        yield _progress("scenes", done, len(scenes), pid)
+        yield _ev(type="node", node=n, project_id=pid)
+        yield _progress("sheets", done, len(founding), pid)
 
 
 def stage_keyframes(project: Project) -> Iterator[StageEvent]:
-    """One master frame per scene. Everything the scene is covered with is animated from it,
-    which is why a bad master is a bad scene however many angles you shoot it from."""
+    """One still per generation unit, composed against the locked reference sheets.
+
+    Preflight is the sheets gate itself: reaching this pass means every sheet the film is
+    built from has been approved, which is the only reason composing against them is safe.
+    """
     pid = project.project_id
     aspect = project.settings.aspect
-    scene_nodes = project.by_kind(NodeKind.SCENE)
-    if not scene_nodes:
+    units = list(_units(project))
+    if not units:
         return
 
-    done = sum(1 for s in scene_nodes if _keyframe_of(project, s))
-    yield _progress("keyframes", done, len(scene_nodes), pid)
-    for scene_node in scene_nodes:
-        if _keyframe_of(project, scene_node):
+    done = sum(1 for s, _sc, i, _u in units if _keyframe_for(project, s, i))
+    yield _progress("keyframes", done, len(units), pid)
+    for scene_node, scene, i, unit in units:
+        if _keyframe_for(project, scene_node, i):
             continue
-        style = _style_of(project)
-        scene, dna_blocks, env = _scene_context(project, scene_node)
         n = scene.get("n", "")
-        yield _ev(label=f"Framing scene {n}…", project_id=pid)
+        multi = len(scene.get("coverage") or []) > 1
+        setup = f"{unit.get('shot','')}, {unit.get('angle','')}".strip(", ")
+        yield _ev(label=f"Framing scene {n} — {setup}…", project_id=pid)
         kf = project.add(Node(
-            kind=NodeKind.KEYFRAME, title=f"Keyframe · Scene {n}",
+            kind=NodeKind.KEYFRAME, title=f"Frame {n}" + (f".{i + 1}" if multi else ""),
             status=NodeStatus.RUNNING, parent_ids=[scene_node.node_id],
-            data={"n": n, "scene_title": scene.get("title", ""),
-                  "action": scene.get("action", "")}))
+            # The unit lives on the node: it is what this frame exists to be the first frame
+            # of, and what a re-render has to reproduce. `coverage` holds this single unit.
+            data={"n": n, "i": i, "scene_title": scene.get("title", ""), "setup": setup,
+                  "coverage": unit, "prompt": unit.get("keyframe_prompt", "")}))
         with _safe(kf, "keyframe"):
+            prompt = _prompt_of(project, kf)
             asset, report, attempt = yield from _gated(
                 kf, NodeKind.KEYFRAME,
-                lambda a: gb.generate_image(
-                    camera.keyframe_prompt(style, scene, dna_blocks, env),
-                    seed=f"{n}-{a}", aspect_ratio=aspect),
+                lambda a: gb.generate_image(prompt, seed=f"{n}-{i}-{a}", aspect_ratio=aspect),
                 _target_for(project, kf), cfg.QC_MAX_REGENS, pid)
             _settle(kf, asset, report, attempt)
         done += 1
         yield _ev(type="node", node=kf, project_id=pid)
-        yield _progress("keyframes", done, len(scene_nodes), pid)
+        yield _progress("keyframes", done, len(units), pid)
 
 
-def stage_shots(project: Project) -> Iterator[StageEvent]:
-    """The coverage: every camera setup, animated off its already-approved master frame.
+def stage_video(project: Project) -> Iterator[StageEvent]:
+    """Animate every approved still, then cut the result together.
 
-    The expensive stage, and the reason the gates before it exist at all.
+    The expensive pass, and the reason the three gates before it exist at all. Each clip
+    starts from its own unit's still, so nothing is re-composed here — the frame the director
+    approved is the frame that starts moving.
     """
     pid = project.project_id
     aspect = project.settings.aspect
-    plans: list[tuple[Node, Node, dict, list[str], str, list[dict]]] = []
-    for scene_node in project.by_kind(NodeKind.SCENE):
-        kf = _keyframe_of(project, scene_node)
-        if not kf:
-            continue
-        scene, dna_blocks, env = _scene_context(project, scene_node)
-        plans.append((scene_node, kf, scene, dna_blocks, env, scene.get("coverage") or []))
-
-    total = sum(len(cov) for *_, cov in plans)
-    if not total:
+    units = [(s, sc, i, u, kf) for s, sc, i, u in _units(project)
+             if (kf := _keyframe_for(project, s, i))]
+    if not units:
         return
-    existing = {(s.data.get("n"), s.data.get("i")) for s in project.by_kind(NodeKind.SHOT)}
-    done = 0
-    yield _progress("shots", len(existing), total, pid)
 
-    for _scene_node, kf, scene, dna_blocks, env, coverage in plans:
+    total = len(units)
+    done = sum(1 for *_x, kf in units if _shot_of(project, kf))
+    yield _progress("video", done, total, pid)
+
+    for scene_node, scene, i, unit, kf in units:
+        if _shot_of(project, kf):
+            continue
+        done += 1
+        if not kf.asset:
+            # No still to animate — tick anyway so the bar still reaches its total instead of
+            # stalling on a unit whose frame already failed.
+            yield _progress("video", done, total, pid)
+            continue
+
         n = scene.get("n", "")
-        style = _style_of(project)
-        for ci, cov in enumerate(coverage):
-            done += 1
-            if (n, ci) in existing:
-                continue
-            if not kf.asset:
-                # No master frame to shoot from — tick anyway so the bar still reaches its
-                # total instead of stalling on a scene that already failed.
-                yield _progress("shots", done, total, pid)
-                continue
+        multi = len(scene.get("coverage") or []) > 1
+        yield _ev(label=f"Shooting scene {n} — {kf.data.get('setup', '')}…", project_id=pid)
+        shot = project.add(Node(
+            kind=NodeKind.SHOT, title=f"Shot {n}" + (f".{i + 1}" if multi else ""),
+            status=NodeStatus.RUNNING, parent_ids=[kf.node_id],
+            data={"vo": scene.get("vo", ""), "n": n, "i": i,
+                  "setup": kf.data.get("setup", ""), "coverage": unit,
+                  "prompt": unit.get("video_prompt", "")}))
+        with _safe(shot, "animation"):
+            prompt = _prompt_of(project, shot)
+            # Judged against the still it was animated from, on frames sampled across the
+            # whole clip — that's how a face that morphs at second four is caught.
+            asset, report, attempt = yield from _gated(
+                shot, NodeKind.SHOT,
+                lambda _a: gb.image_to_video(kf.asset.url, prompt, duration=SHOT_SECONDS,
+                                             aspect_ratio=aspect,
+                                             framing=unit.get("shot"), move=unit.get("move")),
+                _target_for(project, shot), cfg.QC_MAX_VIDEO_REGENS, pid)
+            _settle(shot, asset, report, attempt)
+            # One voiceover per scene, on its first unit — repeating the line on every setup
+            # would stammer it.
+            if i == 0:
+                yield from _add_vo(project, shot, scene.get("vo", ""))
+        yield _ev(type="node", node=shot, project_id=pid)
+        yield _progress("video", done, total, pid)
 
-            setup = f"{cov.get('shot','')}, {cov.get('angle','')}".strip(", ")
-            yield _ev(label=f"Shooting scene {n} — {setup}…", project_id=pid)
-            shot_node = project.add(Node(
-                kind=NodeKind.SHOT,
-                title=f"Shot {n}" + (f".{ci + 1}" if len(coverage) > 1 else ""),
-                status=NodeStatus.RUNNING,
-                parent_ids=[kf.node_id],
-                # The setup lives on the node: it is what a re-render has to reproduce, and
-                # what the inspector shows as this shot's reason for existing.
-                data={"vo": scene.get("vo", ""), "n": n, "i": ci,
-                      "setup": setup, "coverage": cov}))
-            with _safe(shot_node, "animation"):
-                sp = camera.shot_prompt(style, scene, dna_blocks, env, coverage=cov)
-                # Judged against the master it was framed from, on stills sampled across
-                # the whole clip — that's how a face that morphs at second four is caught.
-                asset, report, attempt = yield from _gated(
-                    shot_node, NodeKind.SHOT,
-                    lambda _a: gb.image_to_video(kf.asset.url, sp, duration=SHOT_SECONDS,
-                                                 aspect_ratio=aspect,
-                                                 framing=cov.get("shot"), move=cov.get("move")),
-                    _target_for(project, shot_node), cfg.QC_MAX_VIDEO_REGENS, pid)
-                _settle(shot_node, asset, report, attempt)
-                # One voiceover per scene, on its first shot — repeating the line on every
-                # setup would stammer it.
-                if ci == 0:
-                    yield from _add_vo(project, shot_node, scene.get("vo", ""))
-            yield _ev(type="node", node=shot_node, project_id=pid)
-            yield _progress("shots", done, total, pid)
+    yield from _assemble(project)
 
 
-def stage_assembly(project: Project) -> Iterator[StageEvent]:
-    """The cut — every shot that survived its gate, in scene order."""
+def _assemble(project: Project) -> Iterator[StageEvent]:
+    """The cut — every clip that survived its gate, in film order.
+
+    Part of the video pass rather than a stage of its own: assembling a timeline costs
+    nothing and decides nothing, and a gate in front of it would be a stop with no decision
+    behind it.
+    """
     pid = project.project_id
     shots = sorted(project.by_kind(NodeKind.SHOT),
                    key=lambda s: (s.data.get("n") or 0, s.data.get("i") or 0))
@@ -537,11 +519,10 @@ def stage_assembly(project: Project) -> Iterator[StageEvent]:
         return
 
     yield _ev(label="Assembling the film…", project_id=pid)
-    yield _progress("assembly", 0, 1, pid)
     ids = [s.node_id for s in shots]
     timeline = next((n for n in project.by_kind(NodeKind.TIMELINE)), None)
     if timeline:
-        # Re-entering assembly after a note re-cuts the same timeline rather than leaving a
+        # Re-entering the pass after a note re-cuts the same timeline rather than leaving a
         # second Final Film on the canvas.
         timeline.parent_ids, timeline.data["shots"] = ids, ids
         timeline.status = NodeStatus.READY
@@ -550,18 +531,32 @@ def stage_assembly(project: Project) -> Iterator[StageEvent]:
                                     status=NodeStatus.READY, parent_ids=ids,
                                     data={"shots": ids}))
     yield _ev(type="node", node=timeline, project_id=pid)
-    yield _progress("assembly", 1, 1, pid)
 
 
 STAGES = {
-    "story": stage_story,
-    "characters": stage_characters,
-    "environments": stage_environments,
-    "scenes": stage_scenes,
+    "synthesis": stage_synthesis,
+    "sheets": stage_sheets,
     "keyframes": stage_keyframes,
-    "shots": stage_shots,
-    "assembly": stage_assembly,
+    "video": stage_video,
 }
+
+# What each pass is answerable for at its gate, by kind.
+#
+# Declared rather than inferred from which nodes a run happened to create: synthesis puts the
+# cast on the canvas as text and the sheets pass renders those same nodes, so "created it"
+# and "answerable for it" are genuinely different questions. A gate that read the first would
+# let the sheets pass clear with nothing in it.
+STAGE_OWNS = {
+    "synthesis": (NodeKind.STORY, NodeKind.SCENE),
+    "sheets": (NodeKind.CHARACTER, NodeKind.ENVIRONMENT),
+    "keyframes": (NodeKind.KEYFRAME,),
+    "video": (NodeKind.SHOT, NodeKind.TIMELINE),
+}
+
+
+def owned_nodes(project: Project, key: str) -> list[str]:
+    kinds = STAGE_OWNS.get(key, ())
+    return [n.node_id for n in project.nodes if n.kind in kinds]
 
 
 # ---- the driver ------------------------------------------------------------
@@ -608,8 +603,8 @@ def _waiting_label(rec: StageRecord) -> str:
 RENDERED = {NodeKind.CHARACTER, NodeKind.ENVIRONMENT, NodeKind.KEYFRAME, NodeKind.SHOT}
 
 
-def _refresh_stale(project: Project, rec: StageRecord) -> Iterator[StageEvent]:
-    """Rebuild whatever in this stage an upstream change invalidated.
+def _refresh_stale(project: Project, key: str) -> Iterator[StageEvent]:
+    """Rebuild whatever this pass owns that an upstream change invalidated.
 
     A stage builds what is missing; this is the other half — what is present but no longer
     true. Without it, re-running a reopened stage would sail past its own stale nodes and
@@ -619,7 +614,7 @@ def _refresh_stale(project: Project, rec: StageRecord) -> Iterator[StageEvent]:
     was only stale by inheritance is current again by the time we are standing here. That is
     why a scene comes back for free and a keyframe has to be paid for.
     """
-    for nid in list(rec.node_ids):
+    for nid in owned_nodes(project, key):
         n = project.get(nid)
         if not n or n.status != NodeStatus.STALE or n.locked:
             continue
@@ -630,21 +625,17 @@ def _refresh_stale(project: Project, rec: StageRecord) -> Iterator[StageEvent]:
             yield _ev(type="node", node=n, project_id=project.project_id)
 
 
-def run(project: Project, *, stop_after: str | None = None,
-        gate_mode: GateMode | None = None) -> Iterator[StageEvent]:
-    """Run the film stage by stage, stopping wherever the gate says to stop.
+def run(project: Project) -> Iterator[StageEvent]:
+    """Run the film one pass at a time, stopping at every gate.
 
     Stages already approved are skipped, so this is both "start the film" and "continue from
     where the director left it" — the difference is only how much of the board is already
-    green. On an auto gate with nothing outstanding the run flows straight through and looks
-    exactly like one continuous generation; the moment something needs a human it stops
-    *before* spending the next stage's budget, which is the entire point.
+    green. A run does exactly one pass and hands the decision back, which is the whole point:
+    the next pass costs more than this one and inherits everything it got wrong. There is no
+    mode in which a pass opens the next one; only a human does.
     """
     pid = project.project_id
     project.ensure_stages()
-    if gate_mode:
-        project.gate_mode = gate_mode
-    mode = project.gate_mode
 
     for key in models.STAGE_KEYS:
         rec = project.stage(key)
@@ -655,32 +646,15 @@ def run(project: Project, *, stop_after: str | None = None,
         rec.started_at = rec.started_at or time.time()
         yield _stage_ev(rec, pid)
 
-        before = {n.node_id for n in project.nodes}
-        yield from _refresh_stale(project, rec)
+        yield from _refresh_stale(project, key)
         yield from STAGES[key](project)
-        # What this stage is answerable for. Read off the graph rather than tracked through
-        # the yields, so a stage that only repaired what an earlier pass left behind still
-        # keeps the nodes it owns.
-        produced = [n.node_id for n in project.nodes if n.node_id not in before]
-        rec.node_ids = produced or rec.node_ids
+        # What this pass is answerable for, by kind — a stage that only repaired what an
+        # earlier pass left behind still keeps the nodes it owns.
+        rec.node_ids = owned_nodes(project, key)
         rec.ended_at = time.time()
 
-        rec.gate = gate.evaluate(project, rec, mode)
+        rec.gate = gate.evaluate(project, rec)
         yield _gate_ev(rec, pid)
-
-        if gate.opens_itself(rec.gate):
-            gate.decide(rec, by="ai", approved=True)
-            yield _stage_ev(rec, pid)
-            # Re-rendering inside this stage can have staled a stage further down that had
-            # already cleared. Reopening it now is what stops the run walking past work it
-            # has just created for itself.
-            for reopened in resync_stages(project):
-                yield _stage_ev(reopened, pid)
-            if stop_after == key:
-                yield _ev(type="done", project_id=pid,
-                          label=f"{rec.label} done — stopping here as asked.")
-                return
-            continue
 
         rec.status = (StageStatus.BLOCKED if rec.gate.verdict == "hold"
                       else StageStatus.AWAITING)
@@ -692,7 +666,10 @@ def run(project: Project, *, stop_after: str | None = None,
 
 
 def approve_stage(project: Project, key: str, note: str | None = None) -> StageRecord | None:
-    """Open a gate by hand. The reviewer's verdict is left exactly as it filed it."""
+    """Open a gate. The reviewer's verdict is left exactly as it filed it.
+
+    The only way past a pass, by design — a human is the only thing that opens a gate here.
+    """
     rec = project.stage(key)
     if not rec or rec.status not in (StageStatus.AWAITING, StageStatus.BLOCKED):
         return None
@@ -702,8 +679,8 @@ def approve_stage(project: Project, key: str, note: str | None = None) -> StageR
 def hold_stage(project: Project, key: str, note: str | None = None) -> StageRecord | None:
     """Refuse a stage the gate was willing to pass — the director's own veto.
 
-    Approving early stages is how a run goes fast; this is the other direction, and it has
-    to exist for the gate to be a decision rather than a formality.
+    A gate that only ever waits is a speed bump. This is the other direction, and it has to
+    exist for the stop to be a decision rather than a formality.
     """
     rec = project.stage(key)
     if not rec or rec.status == StageStatus.PENDING:
@@ -783,11 +760,17 @@ def _mark_downstream_stale(project: Project, node: Node) -> Iterator[StageEvent]
         yield _ev(type="node", node=child, project_id=project.project_id)
 
 
+_VERB = {NodeKind.CHARACTER: "Redesigning", NodeKind.ENVIRONMENT: "Rebuilding",
+         NodeKind.KEYFRAME: "Reframing", NodeKind.SHOT: "Re-shooting"}
+
+
 def _regen(project: Project, node_id: str, note: str | None = None) -> Iterator[StageEvent]:
     """Re-run generation for one node in place, then stale everything downstream of it.
 
-    Cheap fixes stay cheap: a keyframe re-runs the QC gate at the still, and a shot
-    re-animates from its already-approved keyframe rather than regenerating the frame.
+    Every rendered node carries the prompt it was made from, so a re-render is that same
+    prompt again — with the director's note folded into it — rather than a fresh guess at
+    what the node was supposed to be. Cheap fixes stay cheap: a still re-renders alone, and
+    a clip re-animates from its already-approved still.
     """
     pid = project.project_id
     node = project.get(node_id)
@@ -800,85 +783,51 @@ def _regen(project: Project, node_id: str, note: str | None = None) -> Iterator[
         yield _ev(label=f"{node.title} is locked — leaving it exactly as it is.", project_id=pid)
         return
 
-    style = _style_of(project, note)
+    if node.kind == NodeKind.SCENE:
+        # A scene is a plan, not a render — rebuild the frames and the motion under it.
+        for kf in project.children_of(node.node_id):
+            if kf.kind != NodeKind.KEYFRAME:
+                continue
+            yield from _regen(project, kf.node_id, note)
+            for shot in project.children_of(kf.node_id):
+                if shot.kind == NodeKind.SHOT:
+                    yield from _regen(project, shot.node_id, note)
+        return
 
-    if node.kind in (NodeKind.CHARACTER, NodeKind.ENVIRONMENT):
-        is_char = node.kind == NodeKind.CHARACTER
-        yield _ev(label=f"Redesigning {node.title}…", project_id=pid)
-        node.status = NodeStatus.RUNNING
-        yield _ev(type="node", node=node, project_id=pid)
-        base = node.attempt + 1
-        prompt = (_char_prompt(style, node.data.get("dna", "")) if is_char
-                  else _env_prompt(style, node.data.get("desc", "")))
-        seed_base = node.data.get("id", node.node_id)
-        asset, report, attempt = yield from _gated(
-            node, node.kind,
-            lambda a: gb.generate_image(prompt, seed=f"{seed_base}-{base + a}",
-                                        aspect_ratio=project.settings.aspect),
-            _target_for(project, node, note), cfg.QC_MAX_REGENS, pid)
-        _settle(node, asset, report, base + attempt, note=note)
-        yield _ev(type="node", node=node, project_id=pid)
-        yield from _mark_downstream_stale(project, node)
-
-    elif node.kind == NodeKind.KEYFRAME:
-        scene_node = next((project.get(p) for p in node.parent_ids
-                           if project.get(p) and project.get(p).kind == NodeKind.SCENE), None)
-        if not scene_node:
-            yield _ev(type="error", label="That keyframe has lost its scene.", project_id=pid)
-            return
-        yield _ev(label=f"Reframing {node.title}…", project_id=pid)
-        node.status = NodeStatus.RUNNING
-        yield _ev(type="node", node=node, project_id=pid)
-        scene, dna_blocks, env = _scene_context(project, scene_node)
-        base = node.attempt + 1
-        asset, report, attempt = yield from _gated(
-            node, NodeKind.KEYFRAME,
-            lambda a: gb.generate_image(
-                camera.keyframe_prompt(style, scene, dna_blocks, env),
-                seed=f"{scene['n']}-{base + a}", aspect_ratio=project.settings.aspect),
-            _target_for(project, node, note), cfg.QC_MAX_REGENS, pid)
-        _settle(node, asset, report, base + attempt, note=note)
-        yield _ev(type="node", node=node, project_id=pid)
-        yield from _mark_downstream_stale(project, node)
-
-    elif node.kind == NodeKind.SHOT:
-        kf = _master_of(project, node)
-        scene_node = _scene_of(project, kf) if kf else None
-        if not (kf and kf.asset and scene_node):
-            yield _ev(type="error", label="That shot has lost its keyframe.", project_id=pid)
-            return
-        yield _ev(label=f"Re-shooting {node.title}…", project_id=pid)
-        node.status = NodeStatus.RUNNING
-        yield _ev(type="node", node=node, project_id=pid)
-        scene, dna_blocks, env = _scene_context(project, scene_node)
-        # The setup is the shot's own, read off the node: a re-render is the same camera
-        # on the same master, not a fresh guess at how the scene should be covered.
-        cov = node.data.get("coverage") or {}
-        sp = camera.shot_prompt(style, scene, dna_blocks, env, coverage=cov)
-        base = node.attempt + 1
-        asset, report, attempt = yield from _gated(
-            node, NodeKind.SHOT,
-            lambda _a: gb.image_to_video(kf.asset.url, sp, duration=SHOT_SECONDS,
-                                         aspect_ratio=project.settings.aspect,
-                                         framing=cov.get("shot"), move=cov.get("move")),
-            _target_for(project, node, note), cfg.QC_MAX_VIDEO_REGENS, pid)
-        _settle(node, asset, report, base + attempt, note=note)
-        yield _ev(type="node", node=node, project_id=pid)
-        yield from _mark_downstream_stale(project, node)
-
-    elif node.kind == NodeKind.SCENE:
-        # A scene is a plan, not a render — rebuild the frame and the motion under it.
-        for child in project.children_of(node.node_id):
-            if child.kind == NodeKind.KEYFRAME:
-                yield from _regen(project, child.node_id, note)
-                for grandchild in project.children_of(child.node_id):
-                    if grandchild.kind == NodeKind.SHOT:
-                        yield from _regen(project, grandchild.node_id, note)
-
-    else:
+    if node.kind not in RENDERED:
         yield _ev(type="error",
                   label="The story and the final cut are assembled from the graph — "
                         "change a character, scene or shot instead.", project_id=pid)
+        return
+
+    yield _ev(label=f"{_VERB[node.kind]} {node.title}…", project_id=pid)
+    node.status = NodeStatus.RUNNING
+    yield _ev(type="node", node=node, project_id=pid)
+    # The note rewrites the stored prompt in place, so the inspector always shows what
+    # actually made the frame.
+    prompt, base = _repoint(project, node, note), node.attempt + 1
+
+    if node.kind == NodeKind.SHOT:
+        kf = _master_of(project, node)
+        if not (kf and kf.asset):
+            yield _ev(type="error", label="That shot has lost its keyframe.", project_id=pid)
+            return
+        cov = node.data.get("coverage") or {}
+        generate = lambda _a: gb.image_to_video(
+            kf.asset.url, prompt, duration=SHOT_SECONDS, aspect_ratio=project.settings.aspect,
+            framing=cov.get("shot"), move=cov.get("move"))
+        budget = cfg.QC_MAX_VIDEO_REGENS
+    else:
+        seed = node.data.get("id") or f"{node.data.get('n','')}-{node.data.get('i','')}"
+        generate = lambda a: gb.generate_image(prompt, seed=f"{seed}-{base + a}",
+                                               aspect_ratio=project.settings.aspect)
+        budget = cfg.QC_MAX_REGENS
+
+    asset, report, attempt = yield from _gated(
+        node, node.kind, generate, _target_for(project, node, note), budget, pid)
+    _settle(node, asset, report, base + attempt, note=note)
+    yield _ev(type="node", node=node, project_id=pid)
+    yield from _mark_downstream_stale(project, node)
 
 
 def regenerate_node(project: Project, node_id: str, note: str | None = None) -> Iterator[StageEvent]:
@@ -896,24 +845,21 @@ def regenerate_node(project: Project, node_id: str, note: str | None = None) -> 
 
 
 def add_shot(project: Project, keyframe_id: str, spec: dict) -> Iterator[StageEvent]:
-    """Shoot one more setup on an existing master frame.
+    """Shoot one more setup on a scene — a new generation unit, framed off the same sheets.
 
-    This is the canvas equivalent of calling for another angle: the scene is already
-    staged and its master frame is already approved and paid for, so a new shot costs one
-    animation and nothing else — no re-framing, no story rewrite, no downstream staling.
+    This is the canvas equivalent of calling for another angle. A unit is a still and the
+    clip animated from it, so this costs one image and one animation and nothing else — no
+    story rewrite, no re-rendered sheets, no downstream staling.
 
-    `spec` carries whatever the director asked for (shot type, angle, move, and a free
-    note); anything left blank falls back to the scene's own master framing.
+    `spec` carries whatever the director asked for (shot type, angle, move, and a free note);
+    anything left blank falls back to the scene's own staging. `keyframe_id` names any frame
+    of the scene — the new unit joins that scene, it is not filmed off that one frame.
     """
     pid = project.project_id
     kf = project.get(keyframe_id)
     if not kf or kf.kind != NodeKind.KEYFRAME:
-        yield _ev(type="error", label="Shots are filmed from a keyframe — pick one first.",
+        yield _ev(type="error", label="Shots are framed off an existing frame — pick one first.",
                   project_id=pid)
-        return
-    if not kf.asset:
-        yield _ev(type="error", project_id=pid,
-                  label=f"{kf.title} has no frame yet, so there is nothing to shoot from.")
         return
     scene_node = _scene_of(project, kf)
     if not scene_node:
@@ -921,55 +867,82 @@ def add_shot(project: Project, keyframe_id: str, spec: dict) -> Iterator[StageEv
         return
 
     scene, dna_blocks, env = _scene_context(project, scene_node)
-    cov = {
+    style = _style_of(project)
+    unit = {
         "shot": (spec.get("shot") or "").strip() or scene.get("shot", "medium shot"),
         "angle": (spec.get("angle") or "").strip() or scene.get("angle", "eye level"),
         "move": (spec.get("move") or "").strip() or scene.get("move", "locked camera"),
         "action": (spec.get("note") or "").strip() or scene.get("action", ""),
         "intent": (spec.get("note") or "").strip(),
     }
-    setup = f"{cov['shot']}, {cov['angle']}"
-    # Numbered by what is already hanging off this master, so the new shot reads as the
-    # next setup of the scene rather than an orphan.
-    existing = [c for c in project.children_of(kf.node_id) if c.kind == NodeKind.SHOT]
+    # Written the same way synthesis writes them, so an added unit is indistinguishable from
+    # a planned one everywhere downstream — same fields, same prompts, same gate.
+    unit["keyframe_prompt"] = camera.keyframe_prompt(style, scene, dna_blocks, env, unit)
+    unit["video_prompt"] = camera.video_prompt(style, scene, dna_blocks, env, unit)
+    setup = f"{unit['shot']}, {unit['angle']}"
+
+    # The unit is appended to the scene's own coverage: the plan is what the stages walk, so
+    # a unit that only existed as nodes would vanish the next time a pass was re-entered.
+    coverage_list = scene_node.data.setdefault("coverage", [])
+    i = len(coverage_list)
+    coverage_list.append(entities.tokenize_deep(unit, project.entity_names()))
+    stored = coverage_list[i]
     n = scene.get("n", "")
 
     yield _ev(label=f"Shooting another setup on scene {n} — {setup}…", project_id=pid)
-    # A scene shot once is just "Shot 3"; the moment it has two setups that name is wrong,
-    # because "Shot 3.2" implies a 3.1 the canvas never showed.
-    if len(existing) == 1 and existing[0].title == f"Shot {n}":
-        existing[0].title = f"Shot {n}.1"
-        yield _ev(type="node", node=existing[0], project_id=pid)
-    shot_node = project.add(Node(
-        kind=NodeKind.SHOT, title=f"Shot {n}.{len(existing) + 1}",
-        status=NodeStatus.RUNNING, parent_ids=[kf.node_id],
-        data={"vo": "", "n": n, "i": len(existing), "setup": setup,
-              "coverage": cov, "added": True}))
-    yield _ev(type="node", node=shot_node, project_id=pid)
+    yield _ev(type="node", node=scene_node, project_id=pid)
 
-    style = _style_of(project)
-    with _safe(shot_node, "animation"):
-        sp = camera.shot_prompt(style, scene, dna_blocks, env, coverage=cov)
+    kf_new = project.add(Node(
+        kind=NodeKind.KEYFRAME, title=f"Frame {n}.{i + 1}", status=NodeStatus.RUNNING,
+        parent_ids=[scene_node.node_id],
+        data={"n": n, "i": i, "scene_title": scene.get("title", ""), "setup": setup,
+              "coverage": stored, "prompt": stored["keyframe_prompt"], "added": True}))
+    yield _ev(type="node", node=kf_new, project_id=pid)
+    with _safe(kf_new, "keyframe"):
+        prompt = _prompt_of(project, kf_new)
         asset, report, attempt = yield from _gated(
-            shot_node, NodeKind.SHOT,
-            lambda _a: gb.image_to_video(kf.asset.url, sp, duration=SHOT_SECONDS,
+            kf_new, NodeKind.KEYFRAME,
+            lambda a: gb.generate_image(prompt, seed=f"{n}-{i}-{a}",
+                                        aspect_ratio=project.settings.aspect),
+            _target_for(project, kf_new), cfg.QC_MAX_REGENS, pid)
+        _settle(kf_new, asset, report, attempt)
+    yield _ev(type="node", node=kf_new, project_id=pid)
+
+    if not kf_new.asset:
+        yield _ev(type="done", project_id=pid,
+                  label=f"The frame for that setup didn't render, so there was nothing to "
+                        f"animate. Regenerate {kf_new.title} to try again.")
+        return
+
+    shot = project.add(Node(
+        kind=NodeKind.SHOT, title=f"Shot {n}.{i + 1}", status=NodeStatus.RUNNING,
+        parent_ids=[kf_new.node_id],
+        data={"vo": "", "n": n, "i": i, "setup": setup, "coverage": stored,
+              "prompt": stored["video_prompt"], "added": True}))
+    yield _ev(type="node", node=shot, project_id=pid)
+    with _safe(shot, "animation"):
+        prompt = _prompt_of(project, shot)
+        asset, report, attempt = yield from _gated(
+            shot, NodeKind.SHOT,
+            lambda _a: gb.image_to_video(kf_new.asset.url, prompt, duration=SHOT_SECONDS,
                                          aspect_ratio=project.settings.aspect,
-                                         framing=cov.get("shot"), move=cov.get("move")),
-            _target_for(project, shot_node), cfg.QC_MAX_VIDEO_REGENS, pid)
-        _settle(shot_node, asset, report, attempt)
-    yield _ev(type="node", node=shot_node, project_id=pid)
+                                         framing=unit.get("shot"), move=unit.get("move")),
+            _target_for(project, shot), cfg.QC_MAX_VIDEO_REGENS, pid)
+        _settle(shot, asset, report, attempt)
+    yield _ev(type="node", node=shot, project_id=pid)
+    yield from _assemble(project)
     yield _ev(type="done", project_id=pid,
-              label=f"{shot_node.title} is in — {setup}. The master frame was reused, so "
-                    f"nothing else in the film changed.")
+              label=f"{shot.title} is in — {setup}. The sheets and the rest of the scene were "
+                    f"reused, so nothing else in the film changed.")
 
 
 def suggest_setup(project: Project, keyframe_id: str) -> dict | None:
-    """What to shoot next on this master frame, and why.
+    """What to shoot next on this scene, and why.
 
-    Reads the scene off the graph together with every setup already hanging off the frame,
-    so the recommendation is the shot that is *missing* rather than one more of what we
-    have. Costs a text call and renders nothing — it fills the form in, and the director
-    still decides whether to take it.
+    Reads the scene off the graph together with every setup already covered, so the
+    recommendation is the shot that is *missing* rather than one more of what we have. Costs
+    a text call and renders nothing — it fills the form in, and the director still decides
+    whether to take it.
     """
     kf = project.get(keyframe_id)
     if not kf or kf.kind != NodeKind.KEYFRAME:
@@ -980,8 +953,8 @@ def suggest_setup(project: Project, keyframe_id: str) -> dict | None:
 
     scene, _dna, env = _scene_context(project, scene_node)
     _refs, cast = _scene_review_context(project, scene_node)
-    existing = [c.data.get("coverage") or {} for c in project.children_of(kf.node_id)
-                if c.kind == NodeKind.SHOT]
+    existing = [c.data.get("coverage") or {} for c in project.children_of(scene_node.node_id)
+                if c.kind == NodeKind.KEYFRAME]
     out = coverage.suggest(scene, _style_of(project), existing, cast=cast, env=env)
     out["covered"] = len(existing)
     return out
@@ -1055,3 +1028,225 @@ def run_edit(project: Project, instruction: str, target_node_id: str | None) -> 
     yield _ev(label=f"Applying your note to {entities.resolve(target.title, names)}: "
                     f"“{instruction}”…", project_id=pid)
     yield from regenerate_node(project, target.node_id, note=instruction)
+
+
+# ---- propose → approve -----------------------------------------------------
+#
+# The composer no longer applies a note the instant it is typed. It proposes: it works out
+# what the note would change, shows the director the field diff and what it would re-render,
+# and waits. Nothing is written and nothing is paid for until the director approves — which
+# is the whole reason the edit surface is a working surface rather than a fire button.
+
+# The one descriptive field each kind keeps in the story bible — the thing a note like
+# "make the agbada white" is actually about. Keyframes and shots have no bible text of their
+# own; a note about one of those steers its prompt directly instead.
+_EDITABLE = {
+    NodeKind.CHARACTER: ("dna", "wardrobe & look"),
+    NodeKind.ENVIRONMENT: ("desc", "location"),
+    NodeKind.SCENE: ("action", "staging"),
+}
+
+
+def _descendants_of(project: Project, node: Node) -> list[Node]:
+    """Everything downstream of a node, breadth-first. The blast radius of changing it."""
+    out, seen, queue = [], {node.node_id}, list(project.children_of(node.node_id))
+    while queue:
+        n = queue.pop(0)
+        if n.node_id in seen:
+            continue
+        seen.add(n.node_id)
+        out.append(n)
+        queue.extend(project.children_of(n.node_id))
+    return out
+
+
+def _rendered_under(project: Project, node: Node) -> list[Node]:
+    """The node and its descendants that exist as pixels somebody paid for.
+
+    This is the difference between "re-render three shots" and "change some text nothing has
+    been built from yet". An edit to a character the sheets pass has not reached is free; the
+    same edit an hour later is not, and the director should be told which one they are making.
+    """
+    return [n for n in ([node] + _descendants_of(project, node)) if n.asset]
+
+
+def _rewrite_field(style: str, label: str, current: str, instruction: str) -> str | None:
+    """Rewrite one bible field to satisfy a note — the whole revised value, not a diff.
+
+    Returns None when there is no text model, which is the keyless demo: the edit still
+    happens, it just travels as a note folded into the prompt rather than as a visible
+    before/after on the bible text. Both are honest; only one shows a diff.
+    """
+    if cfg.mock_text():
+        return None
+    system = ("You revise ONE field of a film's story bible to satisfy a director's note. "
+              "Return STRICT JSON: {\"value\": \"<the full revised field>\"}. Keep the "
+              "field's own register and roughly its length — you are editing it, not "
+              "rewriting the film. Change only what the note asks for.")
+    import json
+    user = json.dumps({"field": label, "current": current, "note": instruction,
+                       "film_style": style})
+    try:
+        raw = gb.chat(system, user, json_mode=True, temperature=0.3)
+        val = json.loads(re.search(r"\{.*\}", raw, re.DOTALL).group(0)).get("value")
+        val = (val or "").strip()
+        return val or None
+    except Exception:
+        return None
+
+
+def _edit_impact(project: Project, node: Node, change: str, new_name: str | None) -> dict:
+    """What approving this proposal would actually cost, counted off real pixels.
+
+    Unlike the inspector's by-kind impact, this counts a descendant as needing a re-render
+    only if it has actually been rendered — so a note on a not-yet-designed character reads
+    "text only", not "3 assets", which would be three assets that do not exist.
+    """
+    names = project.entity_names()
+    if change == "rename" and node.data.get("id"):
+        rewritten = [
+            {"node_id": r.node_id, "title": entities.resolve(r.node_title, names),
+             "kind": r.node_kind, "field": r.field}
+            for r in entities.back_references(project).get(node.data["id"], [])
+        ]
+        return {"stale": [], "rewritten": rewritten,
+                "cost_hint": "Renames everywhere it's mentioned — no frames re-render, "
+                             "nothing is re-paid for."}
+
+    rendered = _rendered_under(project, node)
+    stale = [{"node_id": n.node_id, "title": entities.resolve(n.title, names),
+              "kind": n.kind.value} for n in rendered]
+    if stale:
+        cost = (f"{len(stale)} rendered asset{'s' if len(stale) != 1 else ''} re-render, "
+                f"everything else stays as it is.")
+    else:
+        cost = "Text only — nothing here has been rendered yet, so nothing is re-paid for."
+    return {"stale": stale, "rewritten": [], "cost_hint": cost}
+
+
+def propose_edit(project: Project, instruction: str, target_node_id: str | None) -> dict:
+    """Read a note against the graph and describe the change — without making it.
+
+    Returns a proposal the composer shows above the input: the target, the kind of change,
+    the field diff where there is one, and the cost. Approving it calls `apply_edit`; nothing
+    here writes to the graph or spends a render.
+    """
+    names = project.entity_names()
+    change, new_name = "semantic", None
+
+    if target_node_id:
+        target = project.get(target_node_id)
+        new_name = route.rename_intent(instruction)
+        if new_name:
+            change = "rename"
+    else:
+        node_id, change, new_name = route.route(project, instruction)
+        target = project.get(node_id) if node_id else None
+
+    if not target or target.kind in (NodeKind.STORY, NodeKind.TIMELINE):
+        return {"ok": False,
+                "reason": "I couldn't tell which part of the film you meant — name a "
+                          "character, a place, a scene or a shot, or @-reference one."}
+
+    title = entities.resolve(target.title, names)
+    tgt = {"node_id": target.node_id, "title": title, "kind": target.kind.value}
+    rendered = bool(_rendered_under(project, target))
+
+    # A rename is unambiguous and free — no field diff, no render, just the propagation.
+    if change == "rename" and new_name and target.data.get("id"):
+        return {"ok": True, "target": tgt, "change": "rename", "new_name": new_name,
+                "from": title, "to": new_name, "field": "name", "label": "name",
+                "note": instruction, "rendered": rendered,
+                "impact": _edit_impact(project, target, "rename", new_name),
+                "summary": f"Rename {title} to “{new_name}” everywhere."}
+
+    # A note about a keyframe or a shot steers its prompt; everything else has a bible field
+    # the note is really about, so we try to show the edit as a before/after on that field.
+    field_spec = _EDITABLE.get(target.kind)
+    if field_spec:
+        field, label = field_spec
+        current = entities.resolve(target.data.get(field, ""), names)
+        proposed = _rewrite_field(_style_of(project), label, current, instruction)
+        if proposed and proposed != current:
+            return {"ok": True, "target": tgt, "change": "field", "field": field,
+                    "label": label, "from": current, "to": proposed,
+                    "note": instruction, "rendered": rendered,
+                    "impact": _edit_impact(project, target, "field", None),
+                    "summary": f"Change {title}'s {label}."}
+
+    # No model, or nothing to diff: carry the note into the prompt as-is.
+    return {"ok": True, "target": tgt, "change": "note", "field": None, "label": None,
+            "from": None, "to": None, "note": instruction, "rendered": rendered,
+            "impact": _edit_impact(project, target, "note", None),
+            "summary": f"Apply your note to {title}."}
+
+
+def _steer_future(project: Project, node: Node, note: str) -> Iterator[StageEvent]:
+    """Fold a note into a not-yet-rendered node's stored prompt(s), spending nothing.
+
+    The rendered path re-renders; this is its opposite number — the edit lands on the prompt
+    the future render will read, so a change made before a stage runs is honoured when it
+    does, without paying to render it twice.
+    """
+    if node.kind in (NodeKind.CHARACTER, NodeKind.ENVIRONMENT):
+        node.data["prompt"] = camera.with_note(node.data.get("prompt") or "", note)
+    elif node.kind == NodeKind.SCENE:
+        # A scene has no prompt of its own; its units carry the prompts the passes will send.
+        for unit in node.data.get("coverage") or []:
+            unit["keyframe_prompt"] = camera.with_note(unit.get("keyframe_prompt") or "", note)
+            unit["video_prompt"] = camera.with_note(unit.get("video_prompt") or "", note)
+    yield from ()
+
+
+def apply_edit(project: Project, req) -> Iterator[StageEvent]:
+    """Execute an approved proposal. This is the only half of the edit that writes.
+
+    Two paths, decided by whether anything has actually been rendered under the target:
+      * rendered  → change the bible text, then regenerate the node and everything connected
+                    to it, exactly as a note-driven regenerate would.
+      * not yet   → change the bible text and steer the stored prompt, but spend nothing —
+                    the pass that eventually renders it reads the edit off the graph.
+
+    A rename is neither: it re-resolves text everywhere and never touches a frame.
+    """
+    pid = project.project_id
+    node = project.get(req.target_node_id)
+    if not node:
+        yield _ev(type="error", label="That part of the film is no longer on the canvas.",
+                  project_id=pid)
+        return
+
+    names = project.entity_names()
+
+    if req.change == "rename" and req.new_name and node.data.get("id"):
+        old = entities.resolve(node.title, names)
+        yield _ev(label=f"Renaming {old} to {req.new_name} everywhere…", project_id=pid)
+        for n in entities.rename_entity(project, node.data["id"], req.new_name):
+            yield _ev(type="node", node=n, project_id=pid)
+        yield _ev(type="done", project_id=pid,
+                  label=f"{old} is now {req.new_name} — across the story, every scene and "
+                        f"the voiceover. No frames needed re-rendering.")
+        return
+
+    # A field edit updates the bible text the inspector and the story brief read from. Stored
+    # tokenised like every other piece of prose, so a name inside it still renames for free.
+    if req.change == "field" and req.field and req.to is not None:
+        node.data[req.field] = entities.tokenize(req.to, names)
+        yield _ev(type="node", node=node, project_id=pid)
+
+    note = req.note or None
+
+    if _rendered_under(project, node):
+        # Something downstream exists — carry the change through it.
+        yield from regenerate_node(project, node.node_id, note=note)
+        return
+
+    # Nothing rendered yet: the edit is real but free. Steer the future render and stop.
+    if note:
+        yield from _steer_future(project, node, note)
+    for rec in resync_stages(project):
+        yield _stage_ev(rec, pid)
+    title = entities.resolve(node.title, names)
+    yield _ev(type="done", project_id=pid,
+              label=f"{title} updated. Nothing was rendered yet, so it costs nothing now — "
+                    f"the change is baked in for when that pass runs.")

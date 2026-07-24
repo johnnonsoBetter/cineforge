@@ -4,18 +4,13 @@
 // pass costs more than the last and inherits its mistakes, which is what makes the gate
 // between them worth stopping at.
 
-export const STAGE_KEYS = [
-  'story', 'characters', 'environments', 'scenes', 'keyframes', 'shots', 'assembly',
-];
+export const STAGE_KEYS = ['synthesis', 'sheets', 'keyframes', 'video'];
 
 export const STAGE_LABEL = {
-  story: 'Story',
-  characters: 'Cast',
-  environments: 'Locations',
-  scenes: 'Breakdown',
-  keyframes: 'Storyboards',
-  shots: 'Animation',
-  assembly: 'Final cut',
+  synthesis: 'Story bible',
+  sheets: 'Reference sheets',
+  keyframes: 'Keyframes',
+  video: 'Video',
 };
 
 // What a stage's status means for the run, in the run's own terms.

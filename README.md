@@ -12,12 +12,14 @@ Backblaze B2. Built on **Genblaze** + **B2**. See `PLAN.md` for the full plan.
   conversational edits, entity/token layer with free renames, impact preview + dependency
   highlight, per-node version history with A/B compare, locks, production monitor, story
   bible + beat sheet + per-scene intent, production settings (length/style/aspect/language).
-- **Gated stages (done, verified in mock mode).** The film is produced in seven passes —
-  story → cast → locations → breakdown → storyboards → animation → final cut — with a gate
-  between each pair. In `auto` the review agent opens the next gate itself and **halts the
-  run** when anything in the pass is outstanding; in `manual` every pass waits for the
-  director. Stages are idempotent and resumable, so a note that stales work three passes
-  downstream reopens exactly those passes and the next run repairs them.
+- **Gated stages (done, verified in mock mode).** The film is produced in four passes —
+  synthesis → sheets → keyframes → video — with a gate after each. Synthesis is the only
+  creative pass: it writes the bible, cast, locations, breakdown **and every prompt** the
+  three generation passes will spend, so those three are purely mechanical (read a prompt off
+  the graph, send it). **Every gate stops for the director** — there is no mode in which a
+  pass opens the next one; QC still judges every asset and spends its regen budget on its
+  own, it just never opens a gate. Stages are idempotent and resumable, so a note that stales
+  work two passes downstream reopens exactly those passes and the next run repairs them.
 - **M1 — real generation (next, and the only thing left).** Wire Genblaze (GMICloud
   image→video) + B2 storage. Everything above already runs through the same code paths, so
   this is a provider swap rather than new plumbing.
@@ -31,15 +33,13 @@ MOCK_MODE=true uvicorn backend.app:app --reload --port 8000
 ```
 
 - `GET  /api/health` — status
-- `POST /api/projects` `{ "idea": "...", "gate_mode": "auto"|"manual" }` → `{ project_id }`
-- `GET  /api/projects/{id}/run` — **SSE**: runs stage by stage, stopping at the first gate
-  that needs a human. Also the *resume* call — cleared stages are skipped, so continuing
-  after an approval is the same request again. `?stop_after=keyframes` for the cheap
-  storyboard pass; `?gate_mode=` switches who opens the gates mid-film.
+- `POST /api/projects` `{ "idea": "..." }` → `{ project_id }`
+- `GET  /api/projects/{id}/run` — **SSE**: runs one pass, then stops at its gate. Also the
+  *resume* call — cleared passes are skipped, so continuing after an approval is the same
+  request again. Every pass stops for the director; there is no flow-through.
 - `GET  /api/projects/{id}/stages` — the stage board: what cleared, what is open, what next
 - `POST /api/stages/approve` `{ project_id, stage, note }` — open a gate; `…/hold` to veto one
-- `GET  /api/projects/{id}/generate` — the one-call shorthand (`?mode=draft` = stop after
-  storyboards). Still halts at any gate that needs a human.
+- `GET  /api/projects/{id}/generate` — alias of `/run`, kept for older clients.
 - `POST /api/edit` `{ project_id, instruction, target_node_id }` — conversational edit (SSE)
 - `GET  /api/projects/{id}/impact?node_id=&change=` — blast radius of a change, before paying
 - `POST /api/versions/select` — accept an earlier take (free; stales what was built from the old one)
