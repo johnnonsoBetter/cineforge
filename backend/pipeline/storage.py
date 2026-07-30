@@ -198,6 +198,8 @@ def _card(p: models.Project) -> dict:
         "idea": p.idea,
         "cover": cover,
         "node_count": len(p.nodes),
+        "length_min": p.settings.length_min,
+        "style_preset": p.settings.style_preset,
         "export_url": p.export_url,
         "visibility": p.visibility.value,
     }

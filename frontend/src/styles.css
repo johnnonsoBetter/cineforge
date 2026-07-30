@@ -2955,6 +2955,12 @@ button:disabled { cursor: default; }
 .lnav-brand { display: flex; align-items: baseline; gap: 11px; }
 .lnav-right { display: flex; align-items: center; gap: 9px; }
 
+/* The dot-matrix mark that sits above the input — a quiet, pixel-grid brand cue, in gold. */
+.lmark { display: flex; justify-content: center; margin: 0 0 30px; }
+.lmark svg { width: 240px; height: auto; }
+.lmark-dot { fill: #4a3d29; }
+.lmark-dot.on { fill: #6d5a3a; }
+
 /* The homepage wears no studio chrome — a plain, transparent header that lets the work speak,
    with light-touch links and the auth control floated to the right. */
 .lnav-plain { position: static; background: transparent; backdrop-filter: none; border-bottom: none; padding: 0 30px; }
@@ -2970,7 +2976,7 @@ button:disabled { cursor: default; }
 .lmain {
   width: min(1120px, 100%); margin: 0 auto;
   display: flex; flex-direction: column;
-  padding: 40px 24px 72px;
+  padding: 120px 24px 72px;
 }
 .lask {
   margin: 0 0 34px;
@@ -3068,46 +3074,46 @@ button:disabled { cursor: default; }
   margin-bottom: 20px;
   font-family: var(--sans); font-size: 16px; color: var(--muted);
 }
-.tgrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 26px 24px; }
+.tgrid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 22px; }
 
+/* A self-contained tile: bordered card, cover with a style badge in the corner, then a
+   footer of title + a "N nodes · M min" stat line — CineForge's own dark-gold surface. */
 .tcard {
-  display: flex; flex-direction: column; text-align: left; padding: 0; cursor: pointer;
-  border: none; background: transparent;
-}
-.tcard-cover {
-  position: relative; aspect-ratio: 16 / 10; border-radius: 12px; overflow: hidden;
-  background: var(--surface-3) center / cover no-repeat;
-  border: 1px solid var(--line);
-  display: flex; align-items: center; justify-content: center;
+  display: flex; flex-direction: column; text-align: left; padding: 0; overflow: hidden; cursor: pointer;
+  border: 1px solid var(--line); border-radius: 16px; background: var(--surface);
   transition: border-color 0.16s, transform 0.16s, box-shadow 0.16s;
 }
-.tcard:hover:not(:disabled) .tcard-cover {
+.tcard:hover:not(:disabled) {
   border-color: var(--line-strong); transform: translateY(-3px);
   box-shadow: 0 16px 38px rgba(0, 0, 0, 0.42);
 }
 .tcard:disabled { cursor: default; }
-.tcard-cover-empty { font-family: var(--serif); font-style: italic; color: var(--faint); font-size: 20px; }
+.tcard-cover {
+  position: relative; aspect-ratio: 16 / 10;
+  background: var(--surface-3) center / cover no-repeat;
+  display: flex; align-items: center; justify-content: center;
+}
+.tcard-cover-empty { font-family: var(--serif); font-style: italic; color: var(--faint); font-size: 22px; }
 .tcard-adopting {
   position: absolute; inset: 0; z-index: 2;
   display: flex; align-items: center; justify-content: center;
   background: rgba(20, 16, 12, 0.72); backdrop-filter: blur(2px);
   font-family: var(--mono); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--gold);
 }
-.tcard-meta { display: flex; align-items: center; gap: 9px; padding: 12px 2px 0; }
+.tcard-badge {
+  position: absolute; top: 12px; right: 12px; padding: 5px 11px; border-radius: 8px;
+  background: rgba(20, 16, 12, 0.72); backdrop-filter: blur(3px);
+  border: 1px solid var(--line-strong);
+  font-family: var(--sans); font-size: 12.5px; color: var(--cream); text-transform: capitalize;
+}
+.tcard-meta { padding: 16px 18px 18px; border-top: 1px solid var(--line); }
 .tcard-title {
-  font-family: var(--sans); font-size: 17px; color: var(--cream);
+  font-family: var(--sans); font-size: 21px; color: var(--cream);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.tcard-badge {
-  flex: none; padding: 2px 8px; border-radius: 6px;
-  border: 1px solid var(--line-strong); background: var(--surface);
-  font-family: var(--mono); font-size: 9px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--gold);
-}
-.tcard-badge.pub { color: var(--green); border-color: rgba(134, 176, 107, 0.4); }
-.tcard-badge.priv { color: var(--muted); }
+.tcard-stat { margin-top: 6px; font-family: var(--sans); font-size: 14px; color: var(--muted); }
 
-@media (max-width: 860px) { .tgrid { grid-template-columns: repeat(2, 1fr); } }
-@media (max-width: 560px) { .tgrid { grid-template-columns: 1fr; } }
+@media (max-width: 720px) { .tgrid { grid-template-columns: 1fr; } }
 
 .lhero { position: relative; padding: 92px 24px 66px; display: flex; justify-content: center; }
 .lhero::after {

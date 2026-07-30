@@ -60,8 +60,7 @@ browser, so every asset shows up broken. Make the bucket public at creation (or 
 CDN via `public_url_base`). Add `OPENAI_API_KEY` too — the QC judge is a vision call and rubber-
 stamps every frame without it.
 
-Switch `PROVIDER_STACK=openai` to route through OpenAI models (Sora / gpt-image) for the
-OpenAI Build Week reuse — no other code changes.
+
 
 ## Layout
 

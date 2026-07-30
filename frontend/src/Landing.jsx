@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import * as api from './api.js';
 import { authEnabled, signOut } from './auth.js';
-import { SUGGESTIONS, SETTING_GROUPS, DEFAULT_SETTINGS } from './ui.js';
+import { SETTING_GROUPS, DEFAULT_SETTINGS } from './ui.js';
 
 // The homepage — a calm, single-focus front door in the spirit of a clean AI console: one
 // question, one input, a few quick starts, and the library of finished work layered beneath.
@@ -10,19 +10,11 @@ import { SUGGESTIONS, SETTING_GROUPS, DEFAULT_SETTINGS } from './ui.js';
 export default function Landing({ session }) {
   const navigate = useNavigate();
   const [gallery, setGallery] = useState([]);
-  const [mine, setMine] = useState([]);
   const [adopting, setAdopting] = useState(null);   // project_id currently being cloned
-
-  const signedIn = !authEnabled || !!session;
 
   useEffect(() => {
     api.getGallery().then((r) => setGallery(r.projects || [])).catch(() => setGallery([]));
   }, []);
-
-  useEffect(() => {
-    if (!signedIn) { setMine([]); return; }
-    api.getLibrary().then((r) => setMine(r.projects || [])).catch(() => setMine([]));
-  }, [signedIn]);
 
   // Forge straight from the homepage: hand the idea to the studio, which owns the streaming
   // run. Signing in gates this only when auth is on.
@@ -71,6 +63,7 @@ export default function Landing({ session }) {
           directly beneath it as a clean grid of thumbnails — describe a film, or pick a
           starting point. */}
       <main className="lmain">
+        <h1 className="lask">What <em>story</em> shall we tell?</h1>
         <Composer onForge={startForge} />
 
         <section className="ltemplates" id="templates">
@@ -94,17 +87,6 @@ export default function Landing({ session }) {
             </div>
           )}
         </section>
-
-        {signedIn && mine.length > 0 && (
-          <section className="ltemplates">
-            <div className="ltemplates-head">Your films</div>
-            <div className="tgrid">
-              {mine.map((f) => (
-                <TemplateCard key={f.project_id} film={f} mine onClick={() => navigate(`/p/${f.project_id}`)} />
-              ))}
-            </div>
-          </section>
-        )}
       </main>
 
       <footer className="lfoot">
@@ -196,32 +178,27 @@ function Composer({ onForge }) {
           </button>
         </div>
       </div>
-
-      <div className="composer-pills">
-        {SUGGESTIONS.map((s) => (
-          <button key={s} className="composer-pill" title={s} onClick={() => setIdea(s)}>
-            {s}
-          </button>
-        ))}
-      </div>
     </>
   );
 }
 
-function TemplateCard({ film, mine, busy, onClick }) {
+// A human label for a style preset (e.g. "cinematic" → "Cinematic"), from the shared groups.
+const styleName = (preset) =>
+  SETTING_GROUPS.find(([k]) => k === 'style_preset')?.[2]
+    .find(([v]) => v === preset)?.[1] || preset;
+
+function TemplateCard({ film, busy, onClick }) {
+  const min = film.length_min ?? 1;
   return (
     <button className="tcard" onClick={onClick} disabled={busy} title={film.idea || film.title}>
       <div className="tcard-cover" style={film.cover ? { backgroundImage: `url(${film.cover})` } : undefined}>
         {!film.cover && <span className="tcard-cover-empty">CineForge</span>}
+        {film.style_preset && <span className="tcard-badge">{styleName(film.style_preset)}</span>}
         {busy && <span className="tcard-adopting">Adopting…</span>}
       </div>
       <div className="tcard-meta">
-        <span className="tcard-title">{film.title || 'Untitled Film'}</span>
-        {mine
-          ? <span className={`tcard-badge ${film.visibility === 'public' ? 'pub' : 'priv'}`}>
-              {film.visibility === 'public' ? 'Public' : 'Private'}
-            </span>
-          : film.export_url && <span className="tcard-badge">Final cut</span>}
+        <div className="tcard-title">{film.title || 'Untitled Film'}</div>
+        <div className="tcard-stat">{film.node_count ?? 0} nodes · {min} min</div>
       </div>
     </button>
   );
