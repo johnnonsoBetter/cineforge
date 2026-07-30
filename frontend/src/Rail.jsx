@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import Monitor from './Monitor.jsx';
-import GateCard from './GateCard.jsx';
 import EditProposal from './EditProposal.jsx';
+import RegenMenu from './RegenMenu.jsx';
 import MentionMenu from './MentionMenu.jsx';
 import { KIND_LABEL } from './ui.js';
 import {
@@ -12,8 +12,9 @@ import {
 // keeps the director/user turns, and hosts the conversational-edit composer.
 export default function Rail({ messages, canEdit, nodes, targetNode, onClearTarget, onFocusNode,
                                onPropose, proposal, onApplyProposal, onDiscardProposal,
-                               busy, progress, current, stages, openGate,
-                               onApproveStage, onHoldStage }) {
+                               busy, progress, current, stages,
+                               openGate, onApproveStage, onHoldStage, onSelectNode,
+                               impact, onRegenerate, onToggleLock }) {
   const [draft, setDraft] = useState('');
   const [caret, setCaret] = useState(0);
   const [refs, setRefs] = useState([]);        // [{ nodeId, label, kind }] mentioned in the draft
@@ -171,7 +172,16 @@ export default function Rail({ messages, canEdit, nodes, targetNode, onClearTarg
         <div className="rail-head-title">Orchestration is the product.</div>
       </div>
 
-      <Monitor progress={progress} stages={stages} current={busy ? current : null} />
+      <Monitor
+        progress={progress}
+        stages={stages}
+        current={busy ? current : null}
+        gate={openGate}
+        busy={busy}
+        onApprove={onApproveStage}
+        onHold={onHoldStage}
+        onSelectNode={onSelectNode}
+      />
 
       <div className="rail-log" ref={logRef}>
         {messages.map((m) => (
@@ -183,19 +193,6 @@ export default function Rail({ messages, canEdit, nodes, targetNode, onClearTarg
       </div>
 
       <div className="rail-foot">
-        {/* The run has stopped and the next stage is the director's call. This sits above
-            the composer because it *is* the composer's subject right now — a note typed
-            while a gate is open is a note about what the gate is holding. */}
-        {openGate && (
-          <GateCard
-            stage={openGate}
-            busy={busy}
-            onApprove={onApproveStage}
-            onHold={onHoldStage}
-            onSelectNode={onFocusNode}
-          />
-        )}
-
         {targetNode && (
           <div className="target-chip">
             <span className="dot" style={{ background: 'var(--gold)' }} />
@@ -227,6 +224,19 @@ export default function Rail({ messages, canEdit, nodes, targetNode, onClearTarg
             onApply={onApplyProposal}
             onDiscard={onDiscardProposal}
             onFocusNode={onFocusNode}
+          />
+        )}
+
+        {/* The regeneration surface, shown only when a rendered entity is selected: what a
+            redo would re-render, which of it to skip this pass, and the redo itself — on the
+            same layer as the conversation, just above the input it belongs with. */}
+        {targetNode && canEdit && (
+          <RegenMenu
+            node={targetNode}
+            impact={impact}
+            busy={busy}
+            onRegenerate={onRegenerate}
+            onToggleLock={onToggleLock}
           />
         )}
 

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { wordDiff, relTime } from './diff.js';
 import { isVideo, shortHash } from './ui.js';
 
@@ -43,9 +43,27 @@ function Swipe({ a, b, labelA, labelB }) {
   );
 }
 
+// Collapse the word-diff into discrete edits: each maximal run of changed words is one
+// entry — the removed text and the added text that replaced it. A director reads it like a
+// changelog: burgundy → emerald, not a wall of prose to re-scan.
+function changeRows(ops) {
+  const rows = [];
+  let cur = null;
+  const flush = () => { if (cur) { rows.push(cur); cur = null; } };
+  for (const op of ops) {
+    if (op.t === 'same') { flush(); continue; }
+    if (!cur) cur = { removed: '', added: '' };
+    const key = op.t === 'del' ? 'removed' : 'added';
+    cur[key] = cur[key] ? `${cur[key]} ${op.text}` : op.text;
+  }
+  flush();
+  return rows;
+}
+
 function PromptDiff({ before, after }) {
   const { ops, added, removed, truncated } = wordDiff(before, after);
   if (!ops.length) return null;
+  const rows = changeRows(ops);
 
   return (
     <div className="diff">
@@ -57,11 +75,29 @@ function PromptDiff({ before, after }) {
           {added === 0 && removed === 0 && <em className="none">no change</em>}
         </span>
       </div>
-      <div className="diff-body">
-        {ops.map((op, i) => (
-          <span key={i} className={`d-${op.t}`}>{op.text} </span>
-        ))}
-      </div>
+
+      {rows.length > 0 ? (
+        <ul className="diff-changes">
+          {rows.map((r, i) => (
+            <li key={i} className="diff-change">
+              {r.removed && r.added ? (
+                <>
+                  <span className="dc-del">{r.removed}</span>
+                  <span className="dc-arrow" aria-hidden="true">→</span>
+                  <span className="dc-add">{r.added}</span>
+                </>
+              ) : r.added ? (
+                <><span className="dc-mark add" aria-hidden="true">+</span><span className="dc-add">{r.added}</span></>
+              ) : (
+                <><span className="dc-mark del" aria-hidden="true">−</span><span className="dc-del">{r.removed}</span></>
+              )}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <div className="diff-same mono-label">No wording changed between these versions.</div>
+      )}
+
       {truncated && (
         <div className="mono-label" style={{ marginTop: 6 }}>
           Prompts too long to diff word by word — shown whole.
@@ -71,9 +107,12 @@ function PromptDiff({ before, after }) {
   );
 }
 
-export default function Takes({ node, onSelectVersion, busy }) {
+export default function Takes({ node, onSelectVersion, busy, focusVersion }) {
   const versions = node.versions || [];
-  const [sel, setSel] = useState(null);
+  const [sel, setSel] = useState(focusVersion ?? null);
+  // The gate can hand History a take to open on (its "compare take N" recommendation). Load
+  // it into the swipe when it arrives, without clobbering a take the user picks by hand.
+  useEffect(() => { if (focusVersion != null) setSel(focusVersion); }, [focusVersion]);
   if (versions.length < 2) return null;
 
   const headN = node.accepted_version;
@@ -84,8 +123,8 @@ export default function Takes({ node, onSelectVersion, busy }) {
   return (
     <div className="insp-section takes-section">
       <div className="takes-head">
-        <h3 style={{ margin: 0 }}>History <span className="mono-label">· {versions.length} takes</span></h3>
-        <span className="mono-label">HEAD → take {headN}</span>
+        <h3 style={{ margin: 0 }}>History <span className="mono-label">· {versions.length} versions</span></h3>
+        <span className="mono-label">In use · version {headN}</span>
       </div>
 
       <ol className="log">
@@ -103,13 +142,13 @@ export default function Takes({ node, onSelectVersion, busy }) {
 
               <button className="log-entry" onClick={() => setSel(isSel ? null : v.version)}>
                 <span className="log-top">
-                  <span className="log-ref">take {v.version}</span>
-                  {isHead && <span className="log-head">HEAD</span>}
+                  <span className="log-ref">Version {v.version}</span>
+                  {isHead && <span className="log-head">in use</span>}
                   <span className="log-when">{relTime(v.created_at)}</span>
                 </span>
 
                 <span className="log-msg">
-                  {v.note ? `“${v.note}”` : i === log.length - 1 ? 'initial generation' : 'regenerated'}
+                  {v.note ? `“${v.note}”` : i === log.length - 1 ? 'first version' : 'regenerated'}
                 </span>
 
                 <span className="log-meta">
@@ -120,7 +159,7 @@ export default function Takes({ node, onSelectVersion, busy }) {
               </button>
 
               {still(v.asset) && (
-                <img className="log-thumb" src={still(v.asset)} alt={`take ${v.version}`} loading="lazy" />
+                <img className="log-thumb" src={still(v.asset)} alt={`version ${v.version}`} loading="lazy" />
               )}
             </li>
           );
@@ -130,13 +169,13 @@ export default function Takes({ node, onSelectVersion, busy }) {
       {picked && picked.version !== headN && (
         <div className="take-diff">
           <div className="diff-title">
-            <span className="mono-label">Diff</span>
-            <span>take {picked.version} → take {headN}</span>
+            <span className="mono-label">What changed</span>
+            <span>version {picked.version} → version {headN} (in use)</span>
           </div>
 
           <Swipe
             a={still(picked.asset)} b={still(head?.asset)}
-            labelA={`take ${picked.version}`} labelB={`take ${headN} · HEAD`}
+            labelA={`version ${picked.version}`} labelB={`version ${headN} · in use`}
           />
 
           <PromptDiff
@@ -146,14 +185,14 @@ export default function Takes({ node, onSelectVersion, busy }) {
 
           <button className="btn-gold checkout" disabled={busy}
                   onClick={() => { onSelectVersion(picked.version); setSel(null); }}>
-            Check out take {picked.version} — no re-render
+            Use version {picked.version} — no re-render
           </button>
         </div>
       )}
 
       {picked && picked.version === headN && (
         <div className="mono-label" style={{ marginTop: 10 }}>
-          Take {headN} is already checked out. Pick an older take to diff against it.
+          Version {headN} is already in use. Pick an earlier version to compare it against.
         </div>
       )}
     </div>

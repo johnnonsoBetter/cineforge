@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { STAGE_KEYS, STAGE_LABEL, stageStatus } from './stages.js';
 
 // The production monitor — the stage board and the work inside it, in one place.
@@ -29,7 +30,60 @@ function Bar({ done, total }) {
   );
 }
 
-export default function Monitor({ progress, stages, current }) {
+// The gate, folded into the board it is a verdict on. The run has stopped at a stage and the
+// next one is the director's call — so that call lives here, under the row it belongs to,
+// rather than as a card floating over the canvas. Same decision as the old gate popover
+// (approve/keep, or hold), compacted to the monitor's width; blockers still click through to
+// the node they name.
+function MonitorGate({ stage, busy, onApprove, onHold, onSelectNode }) {
+  const [note, setNote] = useState('');
+  const { gate } = stage;
+  const held = gate.verdict === 'hold';
+  const blockers = gate.blockers || [];
+
+  return (
+    <div className={`mon-gate ${held ? 'held' : 'clear'}`}>
+      <div className="mon-gate-sum">{gate.summary}</div>
+
+      {blockers.length > 0 && (
+        <div className="mon-gate-blockers">
+          {blockers.map((b) => (
+            <button key={b.node_id} className="mon-blocker"
+                    onClick={() => onSelectNode(b.node_id)} title="Show it on the canvas">
+              <b>{b.title}</b>
+              <span>{b.reason}</span>
+              <em>›</em>
+            </button>
+          ))}
+        </div>
+      )}
+
+      <input
+        className="mon-gate-note"
+        value={note}
+        placeholder={held ? 'Why keep these? (optional)' : 'Note for the record (optional)'}
+        disabled={busy}
+        onChange={(e) => setNote(e.target.value)}
+        onKeyDown={(e) => { if (e.key === 'Enter' && !busy) onApprove(stage.key, note.trim()); }}
+      />
+
+      <div className="mon-gate-actions">
+        <button className="btn-gold" disabled={busy}
+                onClick={() => onApprove(stage.key, note.trim())}
+                title={held ? 'Keep these anyway and start the next stage' : 'Start the next stage'}>
+          {busy ? 'Working…' : held ? 'Keep & continue →' : 'Approve & continue →'}
+        </button>
+        <button className="btn" disabled={busy} onClick={() => onHold(stage.key, note.trim())}
+                title="Leave this stage open — nothing downstream gets built">
+          Hold
+        </button>
+      </div>
+    </div>
+  );
+}
+
+export default function Monitor({ progress, stages, current, gate, busy,
+                                  onApprove, onHold, onSelectNode }) {
   const byKey = Object.fromEntries((stages || []).map((s) => [s.key, s]));
   const anyStage = (stages || []).some((s) => s.status !== 'pending');
   if (!Object.keys(progress).length && !anyStage) return null;
@@ -74,6 +128,18 @@ export default function Monitor({ progress, stages, current }) {
       })}
 
       {current && <div className="monitor-now">{current}</div>}
+
+      {/* The run has stopped and the next stage is waiting on the director — decided here,
+          on the board, not in a floating card over the canvas. */}
+      {gate?.gate && (
+        <MonitorGate
+          stage={gate}
+          busy={busy}
+          onApprove={onApprove}
+          onHold={onHold}
+          onSelectNode={onSelectNode}
+        />
+      )}
     </div>
   );
 }

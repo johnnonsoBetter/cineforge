@@ -32,7 +32,7 @@ export default function ContextMenu({ x, y, node, busy, onClose, onInspect, onRe
       busy || node.locked,
     ],
     takes > 1 && [`Compare ${takes} takes`, run(onInspect), false],
-    node.asset && [node.locked ? 'Unlock' : 'Lock this take', run(() => onToggleLock(!node.locked)), false],
+    node.asset && [node.locked ? 'Unlock' : 'Lock this version', run(() => onToggleLock(!node.locked)), false],
   ].filter(Boolean);
 
   // Keep the menu on screen when the click lands near an edge.

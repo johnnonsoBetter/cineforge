@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { BrowserRouter, Routes, Route, Navigate, useNavigate, useMatch, useLocation } from 'react-router-dom';
 import {
   ReactFlow, Background, MiniMap, useReactFlow, ReactFlowProvider,
 } from '@xyflow/react';
@@ -8,6 +9,7 @@ import * as api from './api.js';
 import { buildGraph } from './layout.js';
 import { descendantsOf } from './graph.js';
 import { CineNode } from './CineNode.jsx';
+import { CoverageGroup } from './CoverageGroup.jsx';
 import Hero from './Hero.jsx';
 import Rail from './Rail.jsx';
 import Inspector from './Inspector.jsx';
@@ -15,17 +17,20 @@ import Timeline from './Timeline.jsx';
 import ContextMenu from './ContextMenu.jsx';
 import ShotDialog from './ShotDialog.jsx';
 import QCGate from './QCGate.jsx';
+import Login from './Login.jsx';
+import Landing from './Landing.jsx';
+import Showcase from './Showcase.jsx';
+import { authEnabled, getSession, onAuthChange, signOut } from './auth.js';
 import { headline as qcHeadline } from './qc.js';
 import { STAGE_KEYS, STAGE_LABEL, isOpenGate } from './stages.js';
 
 const seedStages = () => STAGE_KEYS.map((key) => ({ key, status: 'pending', gate: null }));
 
-const nodeTypes = { cine: CineNode };
+const nodeTypes = { cine: CineNode, coverageGroup: CoverageGroup };
 let MSG_SEQ = 0;
 const mkMsg = (role, text) => ({ id: `m${++MSG_SEQ}`, role, text });
 
-function Studio() {
-  const [health, setHealth] = useState(null);
+function Studio({ session }) {
   const [projectId, setProjectId] = useState(null);
   const [nodes, setNodes] = useState([]);           // graph nodes from the backend
   const [messages, setMessages] = useState([mkMsg('director', "Give me one idea. I'll direct the whole film — story, cast, locations, keyframes, animated shots, final cut — and log every frame to Backblaze B2.")]);
@@ -49,14 +54,20 @@ function Studio() {
   const [impact, setImpact] = useState(null);         // blast radius of changing the selection
   const [proposal, setProposal] = useState(null);     // a proposed edit, awaiting approval
   const [progress, setProgress] = useState({});       // stage key -> { done, total }
+  const [phases, setPhases] = useState({});           // node_id -> transient beat (reviewing/rerendering)
   const [menu, setMenu] = useState(null);             // { x, y, nodeId }
   const [shotAt, setShotAt] = useState(null);         // { node, x, y } — new-setup dialog
-  const [lastSettings, setLastSettings] = useState(null);  // so Replay re-forges like-for-like
+  const [library, setLibrary] = useState([]);         // the caller's films, for the empty-state picker
+  const [visibility, setVis] = useState('private');   // 'private' | 'public' — the open film's share state
 
   const abortRef = useRef(null);
   const rf = useReactFlow();
 
-  useEffect(() => { api.getHealth().then(setHealth).catch(() => {}); }, []);
+  // The URL is the source of truth for which film is open: `/` is the empty state, `/p/:id`
+  // is a film on the canvas. This makes refresh, back/forward and shared links all work.
+  const navigate = useNavigate();
+  const routeMatch = useMatch('/p/:projectId');
+  const urlProjectId = routeMatch?.params?.projectId || null;
 
   // Merge a streamed node into local state (upsert by id).
   const upsertNode = useCallback((node) => {
@@ -89,8 +100,25 @@ function Studio() {
     setStages((prev) => prev.map((s) => (s.key === key ? { ...s, ...patch } : s)));
   }, []);
 
+  // A node's transient lifecycle beat, cleared the moment it settles.
+  const clearPhase = useCallback((id) => setPhases((p) => {
+    if (!(id in p)) return p;
+    const next = { ...p };
+    delete next[id];
+    return next;
+  }), []);
+
   const handleEvent = useCallback((ev) => {
-    if (ev.type === 'node' && ev.node) upsertNode(ev.node);
+    if (ev.type === 'node' && ev.node) {
+      upsertNode(ev.node);
+      // A settled take speaks for itself (verdict / ready), so drop any phase narration; a
+      // still-running emit is the preview frame arriving, which keeps its beat.
+      if (ev.node.status !== 'running') clearPhase(ev.node.node_id);
+    }
+    // The gate narrating one card in place: frame under review, or re-rolling on a hard fail.
+    else if (ev.type === 'node_phase' && ev.node_id) {
+      setPhases((p) => ({ ...p, [ev.node_id]: ev.phase }));
+    }
     else if (ev.type === 'progress' && ev.stage) {
       setProgress((p) => ({ ...p, [ev.stage]: { done: ev.done, total: ev.total } }));
     }
@@ -112,7 +140,7 @@ function Studio() {
     }
     else if (ev.type === 'done' && ev.label) pushMsg('done', ev.label);
     else if (ev.type === 'error' && ev.label) pushMsg('error', ev.label);
-  }, [upsertNode, pushMsg, patchStage]);
+  }, [upsertNode, pushMsg, patchStage, clearPhase]);
 
   const fitSoon = useCallback(() => {
     setTimeout(() => rf.fitView({ padding: 0.18, duration: 520 }), 90);
@@ -154,17 +182,86 @@ function Studio() {
     setSelectedId(null);
     setBuilt(false);
     setProgress({});
+    setPhases({});
     setStages(seedStages());
-    setLastSettings(settings || null);
+    setVis('private');
     setMessages((m) => [...m, mkMsg('user', idea)]);
     try {
       const { project_id } = await api.createProject(idea, settings);
       setProjectId(project_id);
+      navigate(`/p/${project_id}`);   // the film now has its own URL — refresh/share reopens it
       await runFrom(project_id);
     } catch (e) {
       pushMsg('error', `Something interrupted the forge: ${e.message}`);
     }
-  }, [runFrom, pushMsg]);
+  }, [runFrom, pushMsg, navigate]);
+
+  // Forging from the homepage: the landing hands the idea/settings via navigation state and
+  // routes here, so the whole streaming forge stays in this one component. Fires once per
+  // arrival, then clears the history state so a refresh doesn't re-run it.
+  const location = useLocation();
+  const forgedFromNav = useRef(false);
+  useEffect(() => {
+    const f = location.state?.forge;
+    if (f && !forgedFromNav.current) {
+      forgedFromNav.current = true;
+      window.history.replaceState({}, '');
+      forge(f.idea, f.settings);
+    }
+  }, [location, forge]);
+
+  // ---- reopen an existing film ----
+  // Hydrates the same state a fresh run fills, from what's already persisted server-side — so
+  // "continue where I left off" costs nothing and re-renders nothing. Driven by the URL: the
+  // effect below calls this whenever the route points at a film we don't already have loaded.
+  const openProject = useCallback(async (pid) => {
+    setBusy(true);
+    try {
+      const p = await api.getProject(pid);
+      setProjectId(pid);
+      setNodes(p.nodes || []);
+      setReferences(p.references || {});
+      setExportUrl(p.export_url || null);
+      setVis(p.visibility || 'private');
+      setSelectedId(null);
+      const board = await api.getStages(pid);
+      setStages(board.stages);
+      setBuilt(board.complete);
+      loadLedger(pid);
+      fitSoon();
+    } catch (e) {
+      // A stale or forbidden id (deleted, or another user's) shouldn't strand us on a dead
+      // URL — drop back to the library.
+      navigate('/', { replace: true });
+      pushMsg('error', `Could not open that film: ${e.message}`);
+    } finally {
+      setBusy(false);
+    }
+  }, [loadLedger, fitSoon, pushMsg, navigate]);
+
+  // Clear the canvas back to the empty state — the in-memory half of "go home". Kept separate
+  // from navigation so the URL effect can call it (on a back-button to `/`) without looping.
+  const clearView = useCallback(() => {
+    abortRef.current?.abort();
+    setNodes([]); setProjectId(null); setSelectedId(null); setBuilt(false); setBusy(false);
+    setReferences({}); setExportUrl(null); setProgress({}); setPhases({}); setStages(seedStages()); setVis('private');
+    setMessages([mkMsg('director', "Give me one idea. I'll direct the whole film — story, cast, locations, keyframes, animated shots, final cut — and log every frame to Backblaze B2.")]);
+  }, []);
+
+  // Sync the open film to the URL: open when the route names a film we don't have; clear when
+  // it returns to `/` (e.g. the browser back button). Actions that change films navigate();
+  // this effect only reacts, so there's a single source of truth.
+  useEffect(() => {
+    if (urlProjectId && urlProjectId !== projectId && !busy) openProject(urlProjectId);
+    else if (!urlProjectId && projectId) clearView();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [urlProjectId]);
+
+  // The empty state's "My films" picker: refresh the list whenever we're back on it.
+  useEffect(() => {
+    if (projectId) return;
+    api.getLibrary().then((r) => setLibrary(r.projects || [])).catch(() => setLibrary([]));
+  }, [projectId]);
 
   // ---- open a gate, and let the next stage start ----
   const approveStage = useCallback(async (key, note) => {
@@ -196,14 +293,14 @@ function Studio() {
   }, [projectId, busy, pushMsg]);
 
   // ---- regenerate one node ----
-  const regenerate = useCallback(async (node, note) => {
+  const regenerate = useCallback(async (node, note, skip = []) => {
     if (!projectId || busy) return;
     setBusy(true);
     if (note) pushMsg('user', note);
     try {
       const ctrl = new AbortController();
       abortRef.current = ctrl;
-      await api.streamRegenerate(projectId, node.node_id, note, handleEvent, ctrl.signal);
+      await api.streamRegenerate(projectId, node.node_id, note, skip, handleEvent, ctrl.signal);
       flash(`${node.title} regenerated`);
       loadLedger();
       // A note can invalidate stages that had already cleared, so the board is re-read
@@ -244,6 +341,32 @@ function Studio() {
     }
   }, [projectId, busy, handleEvent, pushMsg, loadLedger]);
 
+  // Add another angle to a scene: a genuinely new still plus its clip, where + Shot only
+  // re-animates an existing still. Called from the scene card, so it takes the scene. Additive
+  // too — the scene is already written, so this adds coverage and stales nothing. Selects the
+  // new frame so its own + Shot follows.
+  const addKeyframe = useCallback(async (scene, spec) => {
+    if (!projectId || busy) return;
+    setBusy(true);
+    setShotAt(null);
+    try {
+      const ctrl = new AbortController();
+      abortRef.current = ctrl;
+      let added = null;
+      await api.streamAddKeyframe(projectId, scene.node_id, spec, (ev) => {
+        handleEvent(ev);
+        if (ev.type === 'node' && ev.node?.kind === 'keyframe') added = ev.node;
+      }, ctrl.signal);
+      if (added) setSelectedId(added.node_id);
+      loadLedger();
+    } catch (e) {
+      if (e.name !== 'AbortError') pushMsg('error', `That angle failed: ${e.message}`);
+    } finally {
+      setBusy(false);
+      abortRef.current = null;
+    }
+  }, [projectId, busy, handleEvent, pushMsg, loadLedger]);
+
   // Let the director read the scene and propose the next setup. Costs a text call and
   // renders nothing — it fills the form in, and taking the shot is still a separate act.
   const suggestShot = useCallback(
@@ -251,10 +374,18 @@ function Studio() {
     [projectId]
   );
 
+  // Both openers share one dialog; `mode` picks the labels, cost line and submit handler.
   const openShotDialog = useCallback((node, at) => {
+    // Only opens the Add shot popup — it does not select the node, so the detail stays as it
+    // was. Opening the detail is the card click's job (see onNodeClick), not this button's.
+    setMenu(null);
+    setShotAt({ node, mode: 'shot', ...at });
+  }, []);
+
+  const openKeyframeDialog = useCallback((node, at) => {
     setSelectedId(node.node_id);
     setMenu(null);
-    setShotAt({ node, ...at });
+    setShotAt({ node, mode: 'keyframe', ...at });
   }, []);
 
   // ---- ask the gate for a second opinion ----
@@ -348,7 +479,7 @@ function Studio() {
       if (board) { setStages(board.stages); setBuilt(board.complete); }
       flash(`Take ${version} is live — nothing was re-rendered`);
     } catch (e) {
-      pushMsg('error', `Could not switch take: ${e.message}`);
+      pushMsg('error', `Could not switch version: ${e.message}`);
     }
   }, [projectId, selectedId, upsertNode, flash, pushMsg]);
 
@@ -380,17 +511,35 @@ function Studio() {
     }
   }, [projectId, busy, pushMsg]);
 
-  const reset = useCallback(() => {
-    abortRef.current?.abort();
-    setNodes([]); setProjectId(null); setSelectedId(null); setBuilt(false); setBusy(false);
-    setReferences({}); setExportUrl(null); setProgress({}); setStages(seedStages());
-    setMessages([mkMsg('director', "Give me one idea. I'll direct the whole film — story, cast, locations, keyframes, animated shots, final cut — and log every frame to Backblaze B2.")]);
-  }, []);
+  // "New" opens a fresh forge; the URL effect clears the canvas when the route leaves /p/:id.
+  const reset = useCallback(() => { navigate('/studio'); }, [navigate]);
 
-  const replay = useCallback(() => {
-    const idea = [...messages].reverse().find((m) => m.role === 'user')?.text;
-    if (idea) forge(idea, lastSettings);
-  }, [messages, forge, lastSettings]);
+  // ---- share: make the film public, then hand out its link ----
+  // Public means two things at once — reachable by anyone at /share/:id, and listed in the
+  // homepage template gallery. Private returns it to owner-only.
+  const toggleVisibility = useCallback(async () => {
+    if (!projectId || busy) return;
+    const next = visibility === 'public' ? 'private' : 'public';
+    try {
+      await api.setVisibility(projectId, next);
+      setVis(next);
+      flash(next === 'public'
+        ? 'Public — anyone with the link can view, and it now shows in the gallery'
+        : 'Private — only you can see this film');
+    } catch (e) {
+      pushMsg('error', `Could not change visibility: ${e.message}`);
+    }
+  }, [projectId, busy, visibility, flash, pushMsg]);
+
+  const copyShareLink = useCallback(async () => {
+    const url = `${window.location.origin}/share/${projectId}`;
+    try {
+      await navigator.clipboard.writeText(url);
+      flash('Share link copied to clipboard');
+    } catch {
+      flash(url);
+    }
+  }, [projectId, flash]);
 
   // ---- derived graph ----
   // The highlight is local (instant); the costed impact comes from the backend, which is
@@ -407,8 +556,9 @@ function Studio() {
   }, [projectId, selectedId, nodes.length]);
 
   const { rfNodes, rfEdges } = useMemo(
-    () => buildGraph(nodes, { selectedId, impactIds, onAddShot: openShotDialog }),
-    [nodes, selectedId, impactIds, openShotDialog]
+    () => buildGraph(nodes, { selectedId, impactIds, onAddShot: openShotDialog,
+                              onAddKeyframe: openKeyframeDialog, phases }),
+    [nodes, selectedId, impactIds, openShotDialog, openKeyframeDialog, phases]
   );
 
   const selectedNode = nodes.find((n) => n.node_id === selectedId) || null;
@@ -465,9 +615,9 @@ function Studio() {
   const hasGraph = nodes.length > 0;
 
   return (
-    <div className="app">
+    <div className={`app${hasGraph ? '' : ' empty'}`}>
       <header className="topbar">
-        <div className="brand">
+        <div className="brand" onClick={() => navigate('/')} style={{ cursor: 'pointer' }} title="Home">
           <span className="brand-mark">CineForge</span>
           <span className="brand-sub">AI Film Studio</span>
         </div>
@@ -481,16 +631,6 @@ function Studio() {
         )}
         <div className="topbar-spacer" />
         <div className="topbar-right">
-          {/* Story and pixels go live independently, so say which — a "Mock" badge over a
-              bespoke screenplay would undersell it, and the reverse would oversell it. */}
-          <span className="chip" title={health ? `storage: ${health.storage}` : ''}>
-            <span className="dot" style={{ background: health?.text_live ? 'var(--green)' : 'var(--faint)' }} />
-            {health ? (health.text_live ? 'Story · live' : 'Story · sample') : '…'}
-          </span>
-          <span className="chip">
-            <span className="dot" style={{ background: health?.media_live ? 'var(--gold)' : 'var(--faint)' }} />
-            {health ? (health.media_live ? `Media · ${health.provider_stack}` : 'Media · mock') : '…'}
-          </span>
           {/* The gate's headline number belongs in the chrome: how much still needs a human
               is a fact about the film, not a detail inside one node. */}
           {ledger && ledger.reviewed > 0 && (
@@ -512,8 +652,36 @@ function Studio() {
               ? <a className="btn-gold" href={exportUrl} download>↓ Download film</a>
               : <button className="btn-gold" onClick={exportFilm} disabled={busy}>Export film</button>
           )}
+          {projectId && (
+            <>
+              <button
+                className={`btn vis-toggle ${visibility}`}
+                onClick={toggleVisibility}
+                disabled={busy}
+                title={visibility === 'public'
+                  ? 'Public — anyone with the link can view. Click to make private.'
+                  : 'Private — only you can see this. Click to make public.'}
+              >
+                {visibility === 'public' ? '🌐 Public' : '🔒 Private'}
+              </button>
+              {visibility === 'public' && (
+                <button className="btn" onClick={copyShareLink} title="Copy the share link">Share</button>
+              )}
+            </>
+          )}
           <button className="btn" onClick={reset}>New</button>
-          <button className="btn" onClick={replay} disabled={busy || !projectId}>Replay</button>
+          {authEnabled && (
+            <button
+              className="btn"
+              onClick={async () => {
+                navigate('/');
+                await signOut();
+              }}
+              title={session?.user?.email ? `Signed in as ${session.user.email}` : 'Sign out'}
+            >
+              Sign out
+            </button>
+          )}
           <div className="zoomer">
             <button onClick={() => rf.zoomOut()} title="Zoom out">−</button>
             <span>{zoom}%</span>
@@ -523,36 +691,83 @@ function Studio() {
       </header>
 
       <div className="body">
-        <Rail
-          messages={messages}
-          // A note is the main way to fix what a gate is holding, so edits unlock at the
-          // gate rather than only once the whole film is finished.
-          canEdit={!!projectId && (built || !!openGate)}
-          nodes={nodes}
-          stages={stages}
-          openGate={openGate}
-          onApproveStage={approveStage}
-          onHoldStage={holdStage}
-          targetNode={selectedNode && ['character', 'environment', 'scene', 'keyframe', 'shot'].includes(selectedNode.kind) ? selectedNode : null}
-          onClearTarget={() => setSelectedId(null)}
-          onFocusNode={setSelectedId}
-          onPropose={proposeEdit}
-          proposal={proposal}
-          onApplyProposal={applyProposal}
-          onDiscardProposal={discardProposal}
-          busy={busy}
-          progress={progress}
-          current={currentStage}
-        />
+        {/* The empty state is one idea in, nothing else — the director rail and its "forge a
+            film first" composer only earn their column once a film exists to talk about. */}
+        {hasGraph && (
+          <Rail
+            messages={messages}
+            // A note is the main way to fix what a gate is holding, so edits unlock at the
+            // gate rather than only once the whole film is finished.
+            canEdit={!!projectId && (built || !!openGate)}
+            nodes={nodes}
+            stages={stages}
+            targetNode={selectedNode && ['character', 'environment', 'scene', 'keyframe', 'shot'].includes(selectedNode.kind) ? selectedNode : null}
+            onClearTarget={() => setSelectedId(null)}
+            onFocusNode={setSelectedId}
+            onPropose={proposeEdit}
+            proposal={proposal}
+            onApplyProposal={applyProposal}
+            onDiscardProposal={discardProposal}
+            busy={busy}
+            progress={progress}
+            current={currentStage}
+            openGate={openGate}
+            onApproveStage={approveStage}
+            onHoldStage={holdStage}
+            onSelectNode={setSelectedId}
+            impact={impact}
+            onRegenerate={regenerate}
+            onToggleLock={toggleLock}
+          />
+        )}
 
         <div className="stage">
           {!hasGraph && <Hero onForge={forge} busy={busy} />}
+
+          {/* Coming back to a film you already started: the empty state doubles as a library.
+              Only rendered when there's something to reopen, so a first-time canvas stays clean. */}
+          {!hasGraph && library.length > 0 && (
+            <div className="library">
+              <div className="library-head">Your films</div>
+              <div className="library-grid">
+                {library.map((f) => (
+                  <button
+                    key={f.project_id}
+                    className="library-card"
+                    onClick={() => navigate(`/p/${f.project_id}`)}
+                    disabled={busy}
+                    title={f.idea || f.title}
+                  >
+                    <div className="library-cover" style={f.cover ? { backgroundImage: `url(${f.cover})` } : undefined}>
+                      {!f.cover && <span className="library-cover-empty">CineForge</span>}
+                    </div>
+                    <div className="library-meta">
+                      <div className="library-title">{f.title || 'Untitled Film'}</div>
+                      <div className="library-sub">{f.node_count} nodes{f.export_url ? ' · exported' : ''}</div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
 
           <ReactFlow
             nodes={rfNodes}
             edges={rfEdges}
             nodeTypes={nodeTypes}
-            onNodeClick={(_, n) => { setSelectedId(n.id); setMenu(null); }}
+            onNodeClick={(e, n) => {
+              setSelectedId(n.id);
+              setMenu(null);
+              // A keyframe with a master frame is the one card you call coverage from, so
+              // clicking it opens the detail and the Add shot popup together — the popup rides
+              // beside the frame, the Inspector carries the rest. Other kinds just select.
+              const node = nodes.find((x) => x.node_id === n.id);
+              if (node?.kind === 'keyframe' && node.asset?.url) {
+                setShotAt({ node, mode: 'shot', x: e.clientX, y: e.clientY });
+              } else {
+                setShotAt(null);
+              }
+            }}
             onNodeContextMenu={(e, n) => {
               e.preventDefault();
               setSelectedId(n.id);
@@ -590,11 +805,11 @@ function Studio() {
 
           {selectedNode && (
             <Inspector
+              key={selectedNode.node_id}
               node={selectedNode}
               busy={busy}
               onClose={() => setSelectedId(null)}
-              onRegenerate={(n) => regenerate(n)}
-              impact={impact}
+              onRegenerate={(n, note) => regenerate(n, note)}
               references={references}
               onSelectNode={(id) => setSelectedId(id)}
               onSelectEntity={(entityId) => {
@@ -604,7 +819,6 @@ function Studio() {
               }}
               onRename={(newName) => renameEntity(selectedNode.data?.id, newName)}
               onSelectVersion={selectVersion}
-              onToggleLock={toggleLock}
               sceneShots={sceneShots}
               entityNodes={entityNodes}
               onAcceptQC={acceptQC}
@@ -639,9 +853,10 @@ function Studio() {
             <ShotDialog
               node={shotAt.node}
               at={shotAt}
+              mode={shotAt.mode}
               busy={busy}
               onClose={() => setShotAt(null)}
-              onSubmit={addShot}
+              onSubmit={shotAt.mode === 'keyframe' ? addKeyframe : addShot}
               onSuggest={suggestShot}
             />
           )}
@@ -651,10 +866,80 @@ function Studio() {
   );
 }
 
-export default function App() {
+// The studio is the only surface that requires a signed-in caller (when auth is on). The
+// landing, share and login pages are public, so the gate lives here per-route rather than
+// wrapping the whole app.
+function StudioGate({ session }) {
+  if (authEnabled && !session) return <Navigate to="/login" replace />;
+  return <Studio session={session} />;
+}
+
+// The login page has no reason to show once you're in — bounce straight to the studio. With
+// auth off there is nothing to sign into, so the same redirect applies.
+function LoginRoute({ session }) {
+  if (!authEnabled || session) return <Navigate to="/studio" replace />;
+  return <Login />;
+}
+
+// CineForge is a visual studio — a living node canvas, a director rail and an inspector that
+// all need width to work. Rather than reflow all of that onto a phone, we gate small screens
+// behind a plain, friendly notice. Purely CSS-driven (a fixed overlay revealed under the
+// breakpoint), so there's no resize bookkeeping and it covers whatever is behind it.
+function MobileGate() {
   return (
-    <ReactFlowProvider>
-      <Studio />
-    </ReactFlowProvider>
+    <div className="mobile-gate">
+      <div className="mobile-gate-inner">
+        <div className="hero-mark">Cine<em>Forge</em></div>
+        <div className="mg-badge">Desktop experience</div>
+        <h1>Best seen on the big screen</h1>
+        <p>
+          CineForge directs a whole film on a living canvas — screenplay, cast, keyframes and
+          shots laid out side by side. That workspace needs room to breathe, so it isn't ready
+          for phones just yet.
+        </p>
+        <p className="mg-hint">Open CineForge on a laptop or desktop — a window at least 900px wide — to start forging.</p>
+      </div>
+    </div>
+  );
+}
+
+export default function App() {
+  // undefined while we're still resolving the session (avoids a flash of the login gate);
+  // null = signed out; an object = signed in. With auth off this settles to a stand-in
+  // session immediately, so the gate never shows.
+  const [session, setSession] = useState(undefined);
+
+  useEffect(() => {
+    let alive = true;
+    getSession().then((s) => {
+      if (!alive) return;
+      api.setAuthToken(s?.access_token || null);
+      setSession(s);
+    });
+    const unsub = onAuthChange((s) => {
+      api.setAuthToken(s?.access_token || null);
+      setSession(s);
+    });
+    return () => { alive = false; unsub(); };
+  }, []);
+
+  if (session === undefined) return <><MobileGate /><div className="app empty" /></>;
+
+  return (
+    <>
+      <MobileGate />
+      <BrowserRouter>
+        <ReactFlowProvider>
+          <Routes>
+            <Route path="/" element={<Landing session={session} />} />
+            <Route path="/login" element={<LoginRoute session={session} />} />
+            <Route path="/studio" element={<StudioGate session={session} />} />
+            <Route path="/p/:projectId" element={<StudioGate session={session} />} />
+            <Route path="/share/:projectId" element={<Showcase session={session} />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </ReactFlowProvider>
+      </BrowserRouter>
+    </>
   );
 }

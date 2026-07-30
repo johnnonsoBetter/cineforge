@@ -31,6 +31,13 @@ class NodeStatus(str, Enum):
     FLAGGED = "flagged"    # QC failed twice -> needs a human
 
 
+class Visibility(str, Enum):
+    """Who can see a film. Private is owner-only (the default); public is reachable by
+    anyone with the share link and listed in the homepage template gallery."""
+    PRIVATE = "private"
+    PUBLIC = "public"
+
+
 class Provenance(BaseModel):
     """Mirror of a Genblaze manifest summary, persisted alongside each asset in B2."""
     provider: Optional[str] = None
@@ -40,6 +47,9 @@ class Provenance(BaseModel):
     manifest_uri: Optional[str] = None
     canonical_hash: Optional[str] = None
     verified: Optional[bool] = None
+    # This asset's own run, and the run it was regenerated from — the parent-linked chain
+    # that makes a take's lineage (and the drift check) navigable in the provenance drawer.
+    run_id: Optional[str] = None
     parent_run_id: Optional[str] = None
 
 
@@ -250,6 +260,9 @@ class ProjectSettings(BaseModel):
 
 class Project(BaseModel):
     project_id: str = Field(default_factory=lambda: _id("proj"))
+    # Who owns this film. Optional so projects saved before auth existed still validate; the
+    # library and access checks treat a None owner as unowned (visible only when auth is off).
+    owner_id: Optional[str] = None
     title: str = "Untitled Film"
     idea: str = ""
     settings: ProjectSettings = Field(default_factory=ProjectSettings)
@@ -257,6 +270,12 @@ class Project(BaseModel):
     export_url: Optional[str] = None       # stitched final cut, once rendered
     story_source: str = "sample"           # "llm" when the screenplay is bespoke
     stages: list[StageRecord] = Field(default_factory=list)
+    # Private by default: a film only reaches the public gallery or a share link when its
+    # owner opts in. Older projects saved before this field validate as private.
+    visibility: Visibility = Visibility.PRIVATE
+    # When this film was cloned from a public template, the id it came from — so the
+    # showcase can credit the original and the two stay navigable.
+    forked_from: Optional[str] = None
 
     def ensure_stages(self) -> list[StageRecord]:
         """The stage board, created on first use and filled in for older projects.
@@ -333,6 +352,11 @@ class CreateProjectRequest(BaseModel):
     settings: Optional[ProjectSettings] = None
 
 
+class VisibilityRequest(BaseModel):
+    """Flip a film between private (owner-only) and public (shareable + in the gallery)."""
+    visibility: Visibility
+
+
 class EditRequest(BaseModel):
     """Conversational edit, e.g. 'make the ending more emotional'.
 
@@ -367,6 +391,9 @@ class RegenerateRequest(BaseModel):
     project_id: str
     node_id: str
     note: Optional[str] = None
+    # Downstream node ids to leave exactly as they are for this pass only. A "skip" is a
+    # one-off — unlike a lock, it seals nothing and is forgotten after this regeneration.
+    skip: list[str] = []
 
 
 class RenameEntityRequest(BaseModel):
@@ -405,6 +432,25 @@ class AddShotRequest(BaseModel):
     angle: Optional[str] = None     # low angle | eye level | high angle | dutch angle
     move: Optional[str] = None      # locked camera | slow push-in | handheld drift…
     note: Optional[str] = None      # free direction: what this setup is for
+
+    def spec(self) -> dict:
+        return {"shot": self.shot, "angle": self.angle, "move": self.move, "note": self.note}
+
+
+class AddKeyframeRequest(BaseModel):
+    """Add another angle to a scene — a genuinely new still plus the one clip animated from it.
+
+    Where AddShotRequest re-animates an existing still, this composes a new frame at a new
+    setup, so it is keyed by the scene rather than by a frame. The scene is already written
+    and its sheets are locked, so every field is optional, the same way: a blank form means
+    "shoot the scene again at a fresh angle", and each pick overrides only that part.
+    """
+    project_id: str
+    scene_id: str
+    shot: Optional[str] = None      # wide shot | medium shot | close-up | over-the-shoulder…
+    angle: Optional[str] = None     # low angle | eye level | high angle | dutch angle
+    move: Optional[str] = None      # locked camera | slow push-in | handheld drift…
+    note: Optional[str] = None      # free direction: what this angle is for
 
     def spec(self) -> dict:
         return {"shot": self.shot, "angle": self.angle, "move": self.move, "note": self.note}
@@ -459,7 +505,7 @@ class StageEvent(BaseModel):
     so on the stream, because "the stream ended" and "the stream ended and it's your move"
     look identical to a client otherwise.
     """
-    type: str = "stage"          # stage | node | progress | qc | stage_status | gate | done | error
+    type: str = "stage"          # stage | node | node_phase | progress | qc | stage_status | gate | done | error
     label: Optional[str] = None  # e.g. "Designing characters…"
     node: Optional[Node] = None
     project_id: Optional[str] = None
@@ -467,6 +513,10 @@ class StageEvent(BaseModel):
     done: Optional[int] = None
     total: Optional[int] = None
     qc: Optional[QCReport] = None    # qc only: the report just filed
-    node_id: Optional[str] = None    # qc only: which node it was filed against
+    node_id: Optional[str] = None    # qc / node_phase: which node it is about
+    # node_phase only: a transient lifecycle beat within a still-running node
+    # ("reviewing" | "rerendering"), so the card can narrate the gate without waiting for a
+    # settled node event. Never persisted — it rides the stream, not the graph.
+    phase: Optional[str] = None
     stage_status: Optional[StageStatus] = None   # stage_status only
     gate: Optional[StageGate] = None             # gate only: the decision just reached

@@ -10,7 +10,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
-from . import models
+from . import auth, models
 from .ai import director, entities, gate, qc
 from .config import get_config
 from .pipeline import export, storage
@@ -23,6 +23,48 @@ app.add_middleware(
 )
 
 FRONTEND = Path(__file__).resolve().parent.parent / "frontend"
+
+
+def _is_public(path: str) -> bool:
+    """Routes that don't require a signed-in caller.
+
+    Two kinds: assets reached outside `fetch` — an <img>/<video> src or a download link,
+    which can't carry a bearer header and where a token must never ride a URL — and the
+    public read surface (the gallery and public-project view), which is meant to be seen by
+    anyone. A token is still honoured on these when present, so an owner stays themselves.
+    """
+    return (path == "/api/health"
+            or path == "/api/gallery"
+            or path.startswith("/api/media/")
+            or path.startswith("/api/public/")
+            or path.endswith("/export/download"))
+
+
+@app.middleware("http")
+async def authenticate(request, call_next):
+    """Resolve every `/api/*` request to a user before the route runs.
+
+    With auth off (no Supabase env) every caller is the single `local` user, so the zero-key
+    dev/mock loop is untouched. With auth on, a valid token identifies the caller; a missing
+    or bad one is a 401 on protected routes, and the anonymous caller on public ones.
+    """
+    path = request.url.path
+    if not path.startswith("/api/") or not auth.AUTH_ENABLED:
+        auth.set_current_user(auth.LOCAL_USER)
+        return await call_next(request)
+
+    header = request.headers.get("Authorization", "")
+    token = header[7:] if header.startswith("Bearer ") else None
+    user = auth.verify_token(token) if token else None
+    if user is None and not _is_public(path):
+        return JSONResponse({"detail": "authentication required"}, status_code=401)
+    auth.set_current_user(user or auth.ANON_USER)
+    return await call_next(request)
+
+
+def _owner_scope() -> str | None:
+    """The owner to scope a library read to — the caller when auth is on, else everyone."""
+    return auth.current_user().id if auth.AUTH_ENABLED else None
 
 
 def _sse(gen: Iterator[models.StageEvent], project: models.Project | None = None) -> StreamingResponse:
@@ -53,7 +95,25 @@ def _require(project_id: str) -> models.Project:
     p = storage.get(project_id)
     if not p:
         raise HTTPException(404, "project not found")
+    # Ownership is enforced as a 404, not a 403: a stranger shouldn't even learn the id exists.
+    if auth.AUTH_ENABLED and p.owner_id and p.owner_id != auth.current_user().id:
+        raise HTTPException(404, "project not found")
     return p
+
+
+def _require_readable(project_id: str) -> models.Project:
+    """Like `_require`, but also grants read access to a public film regardless of owner.
+
+    The read surface behind share links and the template gallery: the owner sees their film
+    as always, and anyone else sees it only while it is public — a re-privatised film goes
+    back to a 404 for strangers.
+    """
+    p = storage.get(project_id)
+    if not p:
+        raise HTTPException(404, "project not found")
+    if p.visibility == models.Visibility.PUBLIC:
+        return p
+    return _require(project_id)
 
 
 @app.get("/api/health")
@@ -73,7 +133,8 @@ def health():
 @app.post("/api/projects")
 def create_project(req: models.CreateProjectRequest):
     p = models.Project(idea=req.idea, title=req.title or "Untitled Film",
-                       settings=req.settings or models.ProjectSettings())
+                       settings=req.settings or models.ProjectSettings(),
+                       owner_id=auth.current_user().id)
     p.ensure_stages()
     storage.save(p)
     return {"project_id": p.project_id}
@@ -83,6 +144,47 @@ def create_project(req: models.CreateProjectRequest):
 def get_project(project_id: str):
     """Full project with entity tokens resolved and back-references attached."""
     return entities.project_view(_require(project_id))
+
+
+@app.get("/api/public/projects/{project_id}")
+def get_public_project(project_id: str):
+    """Read-only view of a public film — the target of a share link and template preview.
+
+    Anonymous callers are allowed (see the middleware): a public film is meant to be seen.
+    A private film is a 404 here, exactly as it is to a stranger everywhere else.
+    """
+    p = storage.get(project_id)
+    if not p or p.visibility != models.Visibility.PUBLIC:
+        raise HTTPException(404, "project not found")
+    return entities.project_view(p)
+
+
+@app.post("/api/projects/{project_id}/visibility")
+def set_visibility(project_id: str, req: models.VisibilityRequest):
+    """Make a film public (shareable + in the gallery) or private again. Owner only."""
+    p = _require(project_id)
+    p.visibility = req.visibility
+    storage.save(p)
+    return {"project_id": p.project_id, "visibility": p.visibility.value}
+
+
+@app.post("/api/projects/{project_id}/clone")
+def clone_project(project_id: str):
+    """Fork a film into a new project the caller owns — the "Use this template" action.
+
+    Reads a public film (or one the caller already owns), deep-copies the whole graph so the
+    copy is fully editable, and hands back a fresh private project. Assets keep their durable
+    URLs: the copy points at the same rendered frames until the caller regenerates them.
+    """
+    src = _require_readable(project_id)
+    copy = src.model_copy(deep=True, update={
+        "project_id": models._id("proj"),
+        "owner_id": auth.current_user().id,
+        "visibility": models.Visibility.PRIVATE,
+        "forked_from": src.project_id,
+    })
+    storage.save(copy)
+    return {"project_id": copy.project_id}
 
 
 # ---- the staged run ---------------------------------------------------------
@@ -184,20 +286,21 @@ def apply_edit(req: models.ApplyEditRequest):
 def regenerate(req: models.RegenerateRequest):
     """SSE — re-runs generation for a single node and stales whatever inherited from it."""
     p = _require(req.project_id)
-    return _sse(director.regenerate_node(p, req.node_id, req.note), p)
+    return _sse(director.regenerate_node(p, req.node_id, req.note, req.skip), p)
 
 
 @app.get("/api/shots/suggest")
-def suggest_shot(project_id: str, keyframe_id: str):
-    """The next setup worth taking on this frame, and why. Renders nothing.
+def suggest_shot(project_id: str, node_id: str):
+    """The next setup worth taking on this scene, and why. Renders nothing.
 
     Read-only and cheap on purpose: this fills the form in so a director can accept, adjust
-    or ignore it. The recommendation is not a decision — taking the shot still is.
+    or ignore it. The recommendation is not a decision — taking the shot still is. `node_id`
+    is the scene (+ Keyframe) or one of its frames (+ Shot); both read the same scene.
     """
     p = _require(project_id)
-    out = director.suggest_setup(p, keyframe_id)
+    out = director.suggest_setup(p, node_id)
     if not out:
-        raise HTTPException(404, "no keyframe to shoot from")
+        raise HTTPException(404, "no scene to shoot")
     return out
 
 
@@ -210,6 +313,18 @@ def add_shot(req: models.AddShotRequest):
     """
     p = _require(req.project_id)
     return _sse(director.add_shot(p, req.keyframe_id, req.spec()), p)
+
+
+@app.post("/api/keyframes/add")
+def add_keyframe(req: models.AddKeyframeRequest):
+    """SSE — add another angle to a scene: a new still, plus the one clip animated from it.
+
+    Where `/api/shots/add` re-animates an existing still, this composes a genuinely new frame
+    at a new setup — the honest way to get a real close-up or reverse, which need their own
+    still, not a re-animation of the wide. Costs one image and one clip; nothing goes stale.
+    """
+    p = _require(req.project_id)
+    return _sse(director.add_keyframe(p, req.scene_id, req.spec()), p)
 
 
 # ---- entity graph -----------------------------------------------------------
@@ -369,7 +484,13 @@ def download_export(project_id: str):
 
 @app.get("/api/library")
 def library():
-    return {"projects": storage.list_projects()}
+    return {"projects": storage.list_projects(_owner_scope())}
+
+
+@app.get("/api/gallery")
+def gallery():
+    """The public template library shown on the homepage — every film marked public."""
+    return {"projects": storage.list_public()}
 
 
 @app.get("/api/assets")
@@ -380,6 +501,20 @@ def assets():
 # ---- serve the canvas (single-file frontend) ----
 @app.get("/")
 def index():
+    f = FRONTEND / "index.html"
+    if f.exists():
+        return FileResponse(f)
+    return JSONResponse({"msg": "CineForge API up. Frontend not built yet.",
+                         "health": "/api/health"})
+
+
+# SPA fallback — the canvas is a client-routed app (/, /p/:id), so any non-API path has to
+# return index.html or a refresh/shared deep link would 404. Declared last so every real
+# route above (incl. /api/*) still wins; API paths that fall through here stay a clean 404.
+@app.get("/{full_path:path}")
+def spa(full_path: str):
+    if full_path.startswith("api/"):
+        raise HTTPException(404, "not found")
     f = FRONTEND / "index.html"
     if f.exists():
         return FileResponse(f)

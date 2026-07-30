@@ -26,6 +26,7 @@ person.
 """
 from __future__ import annotations
 import time
+from collections import namedtuple
 from typing import Iterator
 from ..config import get_config
 from .. import models
@@ -85,6 +86,17 @@ def _qc_ev(node: Node, report, project_id: str) -> StageEvent:
     """The reviewer speaking in the run, as it happens."""
     return StageEvent(type="qc", label=f"{node.title} — {qc_agent.headline(report)}",
                       qc=report, node_id=node.node_id, project_id=project_id)
+
+
+def _phase_ev(node: Node, phase: str, project_id: str) -> StageEvent:
+    """A transient lifecycle beat for a still-running node — "reviewing", "rerendering".
+
+    Carries no node payload, so it neither checkpoints the project nor mutates the graph; it
+    just lets the card narrate the gate (frame in, under review, re-rolling) instead of sitting
+    on a skeleton until the settled node event finally lands.
+    """
+    return StageEvent(type="node_phase", node_id=node.node_id, phase=phase,
+                      project_id=project_id)
 
 
 def _reference(node: Node) -> QCReference | None:
@@ -168,23 +180,56 @@ def _gated(node: Node, kind: NodeKind, generate, target: "qc_agent.Target",
            budget: int, project_id: str):
     """Render → review → re-render on a hard fail, up to `budget` extra renders.
 
-    `generate(attempt)` returns a GenResult; the attempt index is threaded through so each
-    retry gets a fresh seed rather than re-rolling the identical frame.
+    `generate(attempt, parent_run_id)` returns a GenResult; the attempt index is threaded
+    through so each retry gets a fresh seed rather than re-rolling the identical frame.
+
+    `parent_run_id` is the run of the take currently on the node — a regeneration descends
+    from it, a first render has none. It's held constant across attempts so the kept result
+    links to the previous *kept* version, not to a discarded failed attempt no node points at.
 
     Yields the reviewer's events and returns `(asset, report, attempt)` to the caller via
     `yield from` — the gate narrates itself while staying one expression at the call site.
     """
+    parent = node.asset.provenance.run_id if (node.asset and node.asset.provenance) else None
     attempt = 0
     while True:
-        res = generate(attempt)
+        res = generate(attempt, parent)
         asset = Asset(kind=kind, url=res.url, thumbnail=res.thumbnail,
                       duration_sec=res.duration_sec, provenance=res.provenance)
+        # Show the take the instant it lands — the card fills with the frame and flips to a
+        # "reviewing" state instead of holding a skeleton while the gate looks. This is a
+        # preview: the version isn't recorded until _settle, so a fail simply overwrites it.
+        node.asset = asset
+        yield _ev(type="node", node=node, project_id=project_id)
+        yield _phase_ev(node, "reviewing", project_id)
         report = qc_agent.review(kind, asset, target, attempt=attempt)
         yield _qc_ev(node, report, project_id)
         if not qc_agent.should_regenerate(report) or attempt >= budget:
             return asset, report, attempt
+        yield _phase_ev(node, "rerendering", project_id)
         yield StageEvent(type="stage", project_id=project_id,
                          label=f"{qc_agent.headline(report)} Re-rendering {node.title}…")
+        attempt += 1
+
+
+def _render_gated(kind: NodeKind, generate, target: "qc_agent.Target", budget: int,
+                  parent_run_id: str | None):
+    """The gate's I/O half, pure and thread-safe — render → review → re-render on a hard fail.
+
+    This is `_gated` with every graph mutation and event yield removed, so it is safe to run
+    on a worker thread. It touches nothing shared: `generate` closes over an already-built
+    prompt and seed, `target` was assembled off the graph before the call, and QC only reads.
+    The draining generator (`_fanout`) is the one that writes the result back onto the node
+    and narrates it. Returns `(asset, report, attempt)`, exactly like `_gated`.
+    """
+    attempt = 0
+    while True:
+        res = generate(attempt, parent_run_id)
+        asset = Asset(kind=kind, url=res.url, thumbnail=res.thumbnail,
+                      duration_sec=res.duration_sec, provenance=res.provenance)
+        report = qc_agent.review(kind, asset, target, attempt=attempt)
+        if not qc_agent.should_regenerate(report) or attempt >= budget:
+            return asset, report, attempt
         attempt += 1
 
 
@@ -197,6 +242,55 @@ def _settle(node: Node, asset: Asset, report, attempt: int, *, note: str | None 
     node.push_version(asset, note=note, qc=report)
     node.attempt = attempt
     node.status = NodeStatus.READY if qc_agent.accepted(report) else NodeStatus.FLAGGED
+
+
+# ---- concurrent fan-out for the still passes -------------------------------
+#
+# The units of a still pass do not depend on one another — every founding sheet stands alone,
+# and every keyframe is composed against the locked sheets rather than against a sibling frame
+# — so they render together instead of end to end. The video pass stays serial: it is the
+# expensive, rate-sensitive one, and animating from an already-approved still is exactly where
+# a burst of concurrent calls costs the most and helps the least.
+
+# One unit of work for the pool: the node it settles onto, a label for its failure report, the
+# render closure, the brief it is judged against, its regen budget, and the run it descends from.
+_Unit = namedtuple("_Unit", "node what generate target budget parent")
+
+
+def _fanout(work: list["_Unit"], *, stage: str, done: int, total: int,
+            project_id: str) -> Iterator[StageEvent]:
+    """Render a batch of independent units concurrently; commit each one as it lands.
+
+    Workers run only `_render_gated` — the pure render/review loop, which is network-bound and
+    touches nothing shared. Every graph mutation, event and checkpoint stays here on the single
+    draining generator, so the project has exactly one writer no matter how many renders are in
+    flight. Concurrency is bounded by `GEN_CONCURRENCY` to stay under the provider's own cap.
+
+    Cards settle in completion order rather than film order — the canvas fills as frames come
+    back — and the monitor still ticks once per unit. A unit that raises carries its failure
+    onto its node and the run continues, the same contract `_safe` gives the serial passes.
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    if not work:
+        return
+    with ThreadPoolExecutor(max_workers=max(1, cfg.GEN_CONCURRENCY)) as pool:
+        futures = {pool.submit(_render_gated, u.node.kind, u.generate, u.target,
+                               u.budget, u.parent): u for u in work}
+        for fut in as_completed(futures):
+            u = futures[fut]
+            node = u.node
+            try:
+                asset, report, attempt = fut.result()
+            except Exception as e:
+                node.status = NodeStatus.FAILED
+                node.qc = qc_agent.error_report(u.what, e)
+            else:
+                node.asset = asset
+                _settle(node, asset, report, attempt)
+                yield _qc_ev(node, report, project_id)
+            done += 1
+            yield _ev(type="node", node=node, project_id=project_id)
+            yield _progress(stage, done, total, project_id)
 
 
 def _prompt_of(project: Project, node: Node) -> str:
@@ -321,9 +415,27 @@ def stage_synthesis(project: Project) -> Iterator[StageEvent]:
         return   # the film is already written; re-entering this stage must not rewrite it
 
     yield _ev(label="Writing the film…", project_id=pid)
-    yield _progress("synthesis", 0, 1, pid)
     cfgp = project.settings
-    plan = entities.tokenize_plan(story_agent.plan(project.idea, cfgp))
+    # The one long LLM call in the app — a full film bible with every prompt front-loaded.
+    # Stream it so the synthesis bar climbs while the film is written instead of sitting
+    # frozen for a minute of dead air. `est` is a soft ceiling for that bar only, in
+    # characters; synthesis collapses to a settled 1/1 the instant the plan lands (below), so
+    # the bar never claims done before the writing actually is. Heartbeats are throttled to
+    # ~every 250 chars so a long stream doesn't flood the SSE channel with tick events.
+    shots = cfgp.target_shots() if cfgp else 8
+    est = max(6000, shots * 800 + 2500)
+    yield _progress("synthesis", 0, est, pid)
+    gen = story_agent.plan_stream(project.idea, cfgp)
+    raw_plan, last = None, 0
+    try:
+        while True:
+            chars = next(gen)
+            if chars - last >= 250:
+                last = chars
+                yield _progress("synthesis", min(chars, est - 1), est, pid)
+    except StopIteration as done:
+        raw_plan = done.value
+    plan = entities.tokenize_plan(raw_plan)
     project.title = plan.get("title", project.title)
     project.story_source = plan.get("_source", "sample")
     # The chosen preset leads; whatever the story agent wrote follows it.
@@ -345,6 +457,9 @@ def stage_synthesis(project: Project) -> Iterator[StageEvent]:
         n = project.add(Node(kind=NodeKind.CHARACTER, title=c["name"],
                              status=NodeStatus.PENDING, parent_ids=[story.node_id],
                              data={"id": c["id"], "dna": c.get("dna", ""),
+                                   "identity": c.get("identity", {}),
+                                   "wardrobe": c.get("wardrobe", ""),
+                                   "bearing": c.get("bearing", ""),
                                    "prompt": c.get("sheet_prompt", "")}))
         yield _ev(type="node", node=n, project_id=pid)
 
@@ -390,21 +505,25 @@ def stage_sheets(project: Project) -> Iterator[StageEvent]:
     yield _ev(label="Rendering the reference sheets…", project_id=pid)
     done = len(founding) - len(todo)
     yield _progress("sheets", done, len(founding), pid)
+
+    # Every founding reference is independent, so they render together. The nodes are marked
+    # running and their prompts built here, on the one thread that owns the graph; only the
+    # render itself is handed to the pool. `parent` is None — these have no prior take.
+    work = []
     for n in todo:
         what = "character sheet" if n.kind == NodeKind.CHARACTER else "location plate"
-        yield _ev(label=f"Designing {n.title}…", project_id=pid)
         n.status = NodeStatus.RUNNING
         yield _ev(type="node", node=n, project_id=pid)
-        with _safe(n, what):
-            prompt, seed = _prompt_of(project, n), n.data.get("id", n.node_id)
-            asset, report, attempt = yield from _gated(
-                n, n.kind,
-                lambda a: gb.generate_image(prompt, seed=f"{seed}-{a}", aspect_ratio=aspect),
-                _target_for(project, n), cfg.QC_MAX_REGENS, pid)
-            _settle(n, asset, report, attempt)
-        done += 1
-        yield _ev(type="node", node=n, project_id=pid)
-        yield _progress("sheets", done, len(founding), pid)
+        prompt, seed = _prompt_of(project, n), n.data.get("id", n.node_id)
+        # Bind prompt/seed per iteration: the render runs later, on a worker, so a bare
+        # closure would see the last loop values instead of this node's.
+        generate = (lambda a, p, prompt=prompt, seed=seed:
+                    gb.generate_image(prompt, seed=f"{seed}-{a}", aspect_ratio=aspect,
+                                      parent_run_id=p))
+        work.append(_Unit(n, what, generate, _target_for(project, n), cfg.QC_MAX_REGENS, None))
+
+    yield _ev(label=f"Designing {len(work)} reference sheet(s) in parallel…", project_id=pid)
+    yield from _fanout(work, stage="sheets", done=done, total=len(founding), project_id=pid)
 
 
 def stage_keyframes(project: Project) -> Iterator[StageEvent]:
@@ -421,13 +540,17 @@ def stage_keyframes(project: Project) -> Iterator[StageEvent]:
 
     done = sum(1 for s, _sc, i, _u in units if _keyframe_for(project, s, i))
     yield _progress("keyframes", done, len(units), pid)
+
+    # One still per unit, each composed against the already-locked sheets and so independent of
+    # every other — they render together. The keyframe nodes are created and marked running here
+    # on the graph-owning thread; the pool only renders. `parent` is None — a first render.
+    work = []
     for scene_node, scene, i, unit in units:
         if _keyframe_for(project, scene_node, i):
             continue
         n = scene.get("n", "")
         multi = len(scene.get("coverage") or []) > 1
         setup = f"{unit.get('shot','')}, {unit.get('angle','')}".strip(", ")
-        yield _ev(label=f"Framing scene {n} — {setup}…", project_id=pid)
         kf = project.add(Node(
             kind=NodeKind.KEYFRAME, title=f"Frame {n}" + (f".{i + 1}" if multi else ""),
             status=NodeStatus.RUNNING, parent_ids=[scene_node.node_id],
@@ -435,16 +558,22 @@ def stage_keyframes(project: Project) -> Iterator[StageEvent]:
             # of, and what a re-render has to reproduce. `coverage` holds this single unit.
             data={"n": n, "i": i, "scene_title": scene.get("title", ""), "setup": setup,
                   "coverage": unit, "prompt": unit.get("keyframe_prompt", "")}))
-        with _safe(kf, "keyframe"):
-            prompt = _prompt_of(project, kf)
-            asset, report, attempt = yield from _gated(
-                kf, NodeKind.KEYFRAME,
-                lambda a: gb.generate_image(prompt, seed=f"{n}-{i}-{a}", aspect_ratio=aspect),
-                _target_for(project, kf), cfg.QC_MAX_REGENS, pid)
-            _settle(kf, asset, report, attempt)
-        done += 1
         yield _ev(type="node", node=kf, project_id=pid)
-        yield _progress("keyframes", done, len(units), pid)
+        prompt = _prompt_of(project, kf)
+        # The locked sheets condition the render, not just the review — this is what turns
+        # "matches the reference" from a prompt instruction into a pixel-level identity lock.
+        # Read here on the graph-owning thread and bound into the closure; the worker only sends.
+        refs = _sheet_refs(project, kf)
+        # Bind prompt/n/i/refs per iteration: the render runs later, on a worker.
+        generate = (lambda a, p, prompt=prompt, n=n, i=i, refs=refs:
+                    gb.generate_image(prompt, seed=f"{n}-{i}-{a}", aspect_ratio=aspect,
+                                      ref_urls=refs, parent_run_id=p))
+        work.append(_Unit(kf, "keyframe", generate, _target_for(project, kf),
+                          cfg.QC_MAX_REGENS, None))
+
+    if work:
+        yield _ev(label=f"Framing {len(work)} shot(s) in parallel…", project_id=pid)
+    yield from _fanout(work, stage="keyframes", done=done, total=len(units), project_id=pid)
 
 
 def stage_video(project: Project) -> Iterator[StageEvent]:
@@ -490,9 +619,9 @@ def stage_video(project: Project) -> Iterator[StageEvent]:
             # whole clip — that's how a face that morphs at second four is caught.
             asset, report, attempt = yield from _gated(
                 shot, NodeKind.SHOT,
-                lambda _a: gb.image_to_video(kf.asset.url, prompt, duration=SHOT_SECONDS,
-                                             aspect_ratio=aspect,
-                                             framing=unit.get("shot"), move=unit.get("move")),
+                lambda _a, p: gb.image_to_video(kf.asset.url, prompt, duration=SHOT_SECONDS,
+                                                aspect_ratio=aspect, parent_run_id=p,
+                                                framing=unit.get("shot"), move=unit.get("move")),
                 _target_for(project, shot), cfg.QC_MAX_VIDEO_REGENS, pid)
             _settle(shot, asset, report, attempt)
             # One voiceover per scene, on its first unit — repeating the line on every setup
@@ -754,9 +883,29 @@ def _scene_review_context(project: Project, scene_node: Node) -> tuple[list[QCRe
     return refs, ", ".join(names)
 
 
-def _mark_downstream_stale(project: Project, node: Node) -> Iterator[StageEvent]:
-    """An upstream change invalidates everything that inherited from it."""
-    for child in entities.mark_stale(project, node.node_id):
+def _sheet_refs(project: Project, keyframe: Node) -> list[str]:
+    """The locked founding references a keyframe is generated *from* — its scene's approved
+    character sheets and environment plate, as image URLs.
+
+    This is the pixel-level identity lock. The prompt asks the model to match the sheets; these
+    hand it the actual sheets to condition on, so a face is carried across rather than merely
+    re-described. They are exactly the references the frame is later judged against, so what a
+    keyframe is built from and what it is graded on are the same locked set.
+    """
+    scene_node = _scene_of(project, keyframe)
+    if not scene_node:
+        return []
+    refs, _cast = _scene_review_context(project, scene_node)
+    return [r.url for r in refs]
+
+
+def _mark_downstream_stale(project: Project, node: Node, skip=None) -> Iterator[StageEvent]:
+    """An upstream change invalidates everything that inherited from it.
+
+    `skip` names downstream nodes the director chose to keep for this pass — they stay
+    current instead of being staled and rebuilt.
+    """
+    for child in entities.mark_stale(project, node.node_id, skip):
         yield _ev(type="node", node=child, project_id=project.project_id)
 
 
@@ -764,15 +913,19 @@ _VERB = {NodeKind.CHARACTER: "Redesigning", NodeKind.ENVIRONMENT: "Rebuilding",
          NodeKind.KEYFRAME: "Reframing", NodeKind.SHOT: "Re-shooting"}
 
 
-def _regen(project: Project, node_id: str, note: str | None = None) -> Iterator[StageEvent]:
+def _regen(project: Project, node_id: str, note: str | None = None, skip=None) -> Iterator[StageEvent]:
     """Re-run generation for one node in place, then stale everything downstream of it.
 
     Every rendered node carries the prompt it was made from, so a re-render is that same
     prompt again — with the director's note folded into it — rather than a fresh guess at
     what the node was supposed to be. Cheap fixes stay cheap: a still re-renders alone, and
     a clip re-animates from its already-approved still.
+
+    `skip` names downstream nodes to leave alone for this pass — a one-off keep, honoured in
+    the scene cascade below and in the downstream-stale walk at the end.
     """
     pid = project.project_id
+    skip = skip or ()
     node = project.get(node_id)
     if not node:
         yield _ev(type="error", label="That node is no longer on the canvas.", project_id=pid)
@@ -784,13 +937,15 @@ def _regen(project: Project, node_id: str, note: str | None = None) -> Iterator[
         return
 
     if node.kind == NodeKind.SCENE:
-        # A scene is a plan, not a render — rebuild the frames and the motion under it.
+        # A scene is a plan, not a render — rebuild the frames and the motion under it,
+        # leaving out any frame or shot the director chose to keep this pass.
         for kf in project.children_of(node.node_id):
             if kf.kind != NodeKind.KEYFRAME:
                 continue
-            yield from _regen(project, kf.node_id, note)
+            if kf.node_id not in skip:
+                yield from _regen(project, kf.node_id, note)
             for shot in project.children_of(kf.node_id):
-                if shot.kind == NodeKind.SHOT:
+                if shot.kind == NodeKind.SHOT and shot.node_id not in skip:
                     yield from _regen(project, shot.node_id, note)
         return
 
@@ -813,31 +968,40 @@ def _regen(project: Project, node_id: str, note: str | None = None) -> Iterator[
             yield _ev(type="error", label="That shot has lost its keyframe.", project_id=pid)
             return
         cov = node.data.get("coverage") or {}
-        generate = lambda _a: gb.image_to_video(
+        generate = lambda _a, p: gb.image_to_video(
             kf.asset.url, prompt, duration=SHOT_SECONDS, aspect_ratio=project.settings.aspect,
-            framing=cov.get("shot"), move=cov.get("move"))
+            parent_run_id=p, framing=cov.get("shot"), move=cov.get("move"))
         budget = cfg.QC_MAX_VIDEO_REGENS
     else:
         seed = node.data.get("id") or f"{node.data.get('n','')}-{node.data.get('i','')}"
-        generate = lambda a: gb.generate_image(prompt, seed=f"{seed}-{base + a}",
-                                               aspect_ratio=project.settings.aspect)
+        # A re-rolled keyframe is conditioned on the same locked sheets as the first pass, so a
+        # regeneration can't quietly drift off-identity. A founding sheet or plate has no scene
+        # to condition on and re-rolls freely — refs stays empty for those.
+        refs = _sheet_refs(project, node) if node.kind == NodeKind.KEYFRAME else None
+        generate = lambda a, p, refs=refs: gb.generate_image(
+            prompt, seed=f"{seed}-{base + a}", aspect_ratio=project.settings.aspect,
+            ref_urls=refs, parent_run_id=p)
         budget = cfg.QC_MAX_REGENS
 
     asset, report, attempt = yield from _gated(
         node, node.kind, generate, _target_for(project, node, note), budget, pid)
     _settle(node, asset, report, base + attempt, note=note)
     yield _ev(type="node", node=node, project_id=pid)
-    yield from _mark_downstream_stale(project, node)
+    yield from _mark_downstream_stale(project, node, skip)
 
 
-def regenerate_node(project: Project, node_id: str, note: str | None = None) -> Iterator[StageEvent]:
+def regenerate_node(project: Project, node_id: str, note: str | None = None,
+                    skip=None) -> Iterator[StageEvent]:
     """Public entry point — one regeneration, one closing event.
+
+    `skip` names downstream nodes the director chose to keep this pass; it flows straight to
+    `_regen`, which honours it in the scene cascade and the downstream-stale walk.
 
     Whatever this invalidated downstream reopens its stage on the way out, so the board and
     the canvas never disagree about how much of the film still stands.
     """
     node = project.get(node_id)
-    yield from _regen(project, node_id, note)
+    yield from _regen(project, node_id, note, skip)
     for rec in resync_stages(project):
         yield _stage_ev(rec, project.project_id)
     yield _ev(type="done", label=f"{node.title} is back." if node else "Nothing to regenerate.",
@@ -861,6 +1025,11 @@ def add_shot(project: Project, keyframe_id: str, spec: dict) -> Iterator[StageEv
         yield _ev(type="error", label="Shots are framed off an existing frame — pick one first.",
                   project_id=pid)
         return
+    # The whole point of another setup is to reuse this still, so it has to exist first.
+    if not kf.asset:
+        yield _ev(type="error", project_id=pid,
+                  label="This frame hasn't rendered yet — there's no still to shoot from.")
+        return
     scene_node = _scene_of(project, kf)
     if not scene_node:
         yield _ev(type="error", label="That keyframe has lost its scene.", project_id=pid)
@@ -875,48 +1044,25 @@ def add_shot(project: Project, keyframe_id: str, spec: dict) -> Iterator[StageEv
         "action": (spec.get("note") or "").strip() or scene.get("action", ""),
         "intent": (spec.get("note") or "").strip(),
     }
-    # Written the same way synthesis writes them, so an added unit is indistinguishable from
-    # a planned one everywhere downstream — same fields, same prompts, same gate.
-    unit["keyframe_prompt"] = camera.keyframe_prompt(style, scene, dna_blocks, env, unit)
+    # Written the same way synthesis writes them, so an added shot is indistinguishable from a
+    # planned one everywhere downstream. Only the video prompt is needed — the still is the
+    # master frame's, reused as-is, so there is no keyframe to prompt for.
     unit["video_prompt"] = camera.video_prompt(style, scene, dna_blocks, env, unit)
     setup = f"{unit['shot']}, {unit['angle']}"
-
-    # The unit is appended to the scene's own coverage: the plan is what the stages walk, so
-    # a unit that only existed as nodes would vanish the next time a pass was re-entered.
-    coverage_list = scene_node.data.setdefault("coverage", [])
-    i = len(coverage_list)
-    coverage_list.append(entities.tokenize_deep(unit, project.entity_names()))
-    stored = coverage_list[i]
+    stored = entities.tokenize_deep(unit, project.entity_names())
     n = scene.get("n", "")
 
+    # Another setup is another shot off the *same* master frame — the still is reused, not
+    # re-rendered, so this costs one clip and nothing else. The new shot takes the next index
+    # in this frame's coverage, which is what the layout reads to fan it out beside its siblings.
+    existing = [x for x in project.by_kind(NodeKind.SHOT) if kf.node_id in x.parent_ids]
+    i = max((x.data.get("i", 0) for x in existing), default=-1) + 1
+
     yield _ev(label=f"Shooting another setup on scene {n} — {setup}…", project_id=pid)
-    yield _ev(type="node", node=scene_node, project_id=pid)
-
-    kf_new = project.add(Node(
-        kind=NodeKind.KEYFRAME, title=f"Frame {n}.{i + 1}", status=NodeStatus.RUNNING,
-        parent_ids=[scene_node.node_id],
-        data={"n": n, "i": i, "scene_title": scene.get("title", ""), "setup": setup,
-              "coverage": stored, "prompt": stored["keyframe_prompt"], "added": True}))
-    yield _ev(type="node", node=kf_new, project_id=pid)
-    with _safe(kf_new, "keyframe"):
-        prompt = _prompt_of(project, kf_new)
-        asset, report, attempt = yield from _gated(
-            kf_new, NodeKind.KEYFRAME,
-            lambda a: gb.generate_image(prompt, seed=f"{n}-{i}-{a}",
-                                        aspect_ratio=project.settings.aspect),
-            _target_for(project, kf_new), cfg.QC_MAX_REGENS, pid)
-        _settle(kf_new, asset, report, attempt)
-    yield _ev(type="node", node=kf_new, project_id=pid)
-
-    if not kf_new.asset:
-        yield _ev(type="done", project_id=pid,
-                  label=f"The frame for that setup didn't render, so there was nothing to "
-                        f"animate. Regenerate {kf_new.title} to try again.")
-        return
 
     shot = project.add(Node(
         kind=NodeKind.SHOT, title=f"Shot {n}.{i + 1}", status=NodeStatus.RUNNING,
-        parent_ids=[kf_new.node_id],
+        parent_ids=[kf.node_id],
         data={"vo": "", "n": n, "i": i, "setup": setup, "coverage": stored,
               "prompt": stored["video_prompt"], "added": True}))
     yield _ev(type="node", node=shot, project_id=pid)
@@ -924,30 +1070,130 @@ def add_shot(project: Project, keyframe_id: str, spec: dict) -> Iterator[StageEv
         prompt = _prompt_of(project, shot)
         asset, report, attempt = yield from _gated(
             shot, NodeKind.SHOT,
-            lambda _a: gb.image_to_video(kf_new.asset.url, prompt, duration=SHOT_SECONDS,
-                                         aspect_ratio=project.settings.aspect,
-                                         framing=unit.get("shot"), move=unit.get("move")),
+            lambda _a, p: gb.image_to_video(kf.asset.url, prompt, duration=SHOT_SECONDS,
+                                            aspect_ratio=project.settings.aspect, parent_run_id=p,
+                                            framing=unit.get("shot"), move=unit.get("move")),
             _target_for(project, shot), cfg.QC_MAX_VIDEO_REGENS, pid)
         _settle(shot, asset, report, attempt)
     yield _ev(type="node", node=shot, project_id=pid)
     yield from _assemble(project)
     yield _ev(type="done", project_id=pid,
-              label=f"{shot.title} is in — {setup}. The sheets and the rest of the scene were "
-                    f"reused, so nothing else in the film changed.")
+              label=f"{shot.title} is in — {setup}. The master frame was reused, so nothing "
+                    f"else in the film changed.")
 
 
-def suggest_setup(project: Project, keyframe_id: str) -> dict | None:
+def add_keyframe(project: Project, scene_id: str, spec: dict) -> Iterator[StageEvent]:
+    """Add another angle to a scene — a genuinely new still, plus the one clip animated from it.
+
+    Where `add_shot` re-animates an existing still, this composes a *new* still at a new
+    framing, conditioned on the same locked sheets, and then animates it. That is the honest
+    home for "another camera angle of this scene": a real close-up needs its own frame, not a
+    re-animation of the wide. The result is a full generation unit — one keyframe, one shot,
+    at a clean 1:1 — indistinguishable downstream from a planned one.
+
+    It costs one image and one clip. Nothing upstream re-renders and nothing goes stale, since
+    the new unit only adds coverage to a scene that is already written and staged. Keyed by the
+    scene, because a new angle belongs to the scene rather than to any one frame already in it.
+    """
+    pid = project.project_id
+    scene_node = project.get(scene_id)
+    if not scene_node or scene_node.kind != NodeKind.SCENE:
+        yield _ev(type="error", label="Angles are added to a scene — pick a scene first.",
+                  project_id=pid)
+        return
+
+    scene, dna_blocks, env = _scene_context(project, scene_node)
+    style = _style_of(project)
+    unit = {
+        "shot": (spec.get("shot") or "").strip() or scene.get("shot", "medium shot"),
+        "angle": (spec.get("angle") or "").strip() or scene.get("angle", "eye level"),
+        "move": (spec.get("move") or "").strip() or scene.get("move", "locked camera"),
+        "action": (spec.get("note") or "").strip() or scene.get("action", ""),
+        "intent": (spec.get("note") or "").strip(),
+    }
+    # A new unit needs both prompts — its own still, then the clip animated from that still.
+    # Written the same way synthesis writes them, so an added angle is indistinguishable from a
+    # planned one everywhere downstream.
+    unit["keyframe_prompt"] = camera.keyframe_prompt(style, scene, dna_blocks, env, unit)
+    unit["video_prompt"] = camera.video_prompt(style, scene, dna_blocks, env, unit)
+    setup = f"{unit['shot']}, {unit['angle']}"
+    stored = entities.tokenize_deep(unit, project.entity_names())
+    n = scene.get("n", "")
+
+    # The new keyframe takes the next index among the scene's frames, which is what the layout
+    # reads to fan it out as a sibling frame under the scene.
+    existing = [c for c in project.children_of(scene_node.node_id) if c.kind == NodeKind.KEYFRAME]
+    i = max((c.data.get("i", 0) for c in existing), default=-1) + 1
+
+    yield _ev(label=f"Framing another angle on scene {n} — {setup}…", project_id=pid)
+
+    new_kf = project.add(Node(
+        kind=NodeKind.KEYFRAME, title=f"Frame {n}.{i + 1}", status=NodeStatus.RUNNING,
+        parent_ids=[scene_node.node_id],
+        data={"n": n, "i": i, "scene_title": scene.get("title", ""), "setup": setup,
+              "coverage": stored, "prompt": stored["keyframe_prompt"], "added": True}))
+    yield _ev(type="node", node=new_kf, project_id=pid)
+    with _safe(new_kf, "composition"):
+        prompt = _prompt_of(project, new_kf)
+        # Composed against the same locked sheets as every other frame of the scene, so the new
+        # angle carries the same faces, wardrobe and light — the identity lock, not a re-describe.
+        refs = _sheet_refs(project, new_kf)
+        asset, report, attempt = yield from _gated(
+            new_kf, NodeKind.KEYFRAME,
+            lambda a, p, prompt=prompt, refs=refs: gb.generate_image(
+                prompt, seed=f"{n}-{i}-{a}", aspect_ratio=project.settings.aspect,
+                ref_urls=refs, parent_run_id=p),
+            _target_for(project, new_kf), cfg.QC_MAX_REGENS, pid)
+        _settle(new_kf, asset, report, attempt)
+    yield _ev(type="node", node=new_kf, project_id=pid)
+
+    # Don't spend a clip animating a frame that never rendered — a failed still has no pixels to
+    # move, and the director's next act is to regenerate the frame, not shoot from nothing.
+    if not new_kf.asset or new_kf.status == NodeStatus.FAILED:
+        yield _ev(type="done", project_id=pid,
+                  label=f"{new_kf.title} didn't render — no clip was shot from it.")
+        return
+
+    shot = project.add(Node(
+        kind=NodeKind.SHOT, title=f"Shot {n}.{i + 1}", status=NodeStatus.RUNNING,
+        parent_ids=[new_kf.node_id],
+        data={"vo": "", "n": n, "i": i, "setup": setup, "coverage": stored,
+              "prompt": stored["video_prompt"], "added": True}))
+    yield _ev(type="node", node=shot, project_id=pid)
+    with _safe(shot, "animation"):
+        vprompt = _prompt_of(project, shot)
+        asset, report, attempt = yield from _gated(
+            shot, NodeKind.SHOT,
+            lambda _a, p: gb.image_to_video(new_kf.asset.url, vprompt, duration=SHOT_SECONDS,
+                                            aspect_ratio=project.settings.aspect, parent_run_id=p,
+                                            framing=unit.get("shot"), move=unit.get("move")),
+            _target_for(project, shot), cfg.QC_MAX_VIDEO_REGENS, pid)
+        _settle(shot, asset, report, attempt)
+    yield _ev(type="node", node=shot, project_id=pid)
+    yield from _assemble(project)
+    yield _ev(type="done", project_id=pid,
+              label=f"{new_kf.title} is in — a new {setup} of scene {n}, still and clip. "
+                    f"Nothing else in the film changed.")
+
+
+def suggest_setup(project: Project, node_id: str) -> dict | None:
     """What to shoot next on this scene, and why.
 
     Reads the scene off the graph together with every setup already covered, so the
     recommendation is the shot that is *missing* rather than one more of what we have. Costs
     a text call and renders nothing — it fills the form in, and the director still decides
     whether to take it.
+
+    `node_id` may be the scene itself (the + Keyframe form) or one of its frames (the + Shot
+    form) — both resolve to the same scene, so the two forms share one recommendation.
     """
-    kf = project.get(keyframe_id)
-    if not kf or kf.kind != NodeKind.KEYFRAME:
+    node = project.get(node_id)
+    if node and node.kind == NodeKind.SCENE:
+        scene_node = node
+    elif node and node.kind == NodeKind.KEYFRAME:
+        scene_node = _scene_of(project, node)
+    else:
         return None
-    scene_node = _scene_of(project, kf)
     if not scene_node:
         return None
 

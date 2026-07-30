@@ -16,6 +16,7 @@ import json
 import re
 from ..config import get_config
 from ..pipeline import genblaze_client as gb
+from . import camera
 
 cfg = get_config()
 
@@ -26,8 +27,12 @@ _SYSTEM = """You are a film creative director. Given a one-line idea, return STR
  "bible": {"theme": str, "genre": str, "mood": str, "conflict": str,
            "resolution": str, "symbolism": str},
  "beats": [{"name": "Opening|Inciting Incident|Rising Action|Climax|Ending", "text": str}],
- "characters": [{"id": "SNAKE_CASE", "name": str, "dna": "compact visual DNA block",
-                 "sheet_prompt": "prompt for this character's reference sheet"}],
+ "characters": [{"id": "SNAKE_CASE", "name": str,
+                 "identity": {"ethnicity": str, "gender": "man|woman|...", "age": "e.g. early 40s",
+                              "build": str, "skin": str, "hair": str, "eyes": str,
+                              "features": "distinguishing marks: facial hair, scars, glasses"},
+                 "wardrobe": "the founding costume this character wears on their reference sheet",
+                 "bearing": "posture and demeanour in one phrase"}],
  "environments": [{"id": "SNAKE_CASE", "name": str, "desc": str,
                    "plate_prompt": "prompt for this location's empty establishing plate"}],
  "scenes": [{"n": int, "title": str, "action": str, "environment_id": str,
@@ -65,6 +70,14 @@ rewrites them. Every one of them:
  - never refers to another shot, another prompt, or "as before".
 Keyframe prompts describe a single frame. Video prompts describe motion over 8 seconds at
 natural real-time pace — never slow motion — and treat the source image as the first frame.
+
+CHARACTERS. Do NOT write a character sheet prompt — the pipeline composes each sheet from the
+identity fields on a fixed studio backdrop, so every character in the film shares one look and
+one background. Your job is to fill those fields precisely; they are what every frame of that
+character is built from. Split each character in two: IDENTITY is permanent physical truth
+(ethnicity, gender, age, build, skin, hair, eyes, distinguishing features) and never changes
+between scenes; WARDROBE is the founding costume they happen to wear on the sheet, and a later
+scene may dress them differently. Keep clothing out of identity and body out of wardrobe.
 
 Give a real spine: want, obstacle, escalation (therefore/but), a turn, a button.
 Write exactly the number of scenes the brief asks for, in the language the brief specifies.
@@ -116,11 +129,23 @@ def _mock(idea: str, target: int = 4) -> dict:
             {"name": "Climax", "text": "He is offered the last seat at the back, by the speakers."},
             {"name": "Ending", "text": "He takes it, and starts nodding to the beat."},
         ],
+        # Split into layers, no flat dna: the keyless path derives dna in camera.ensure_prompts,
+        # so the sample exercises exactly the composition a real synthesis goes through.
         "characters": [
             {"id": "SIMEON", "name": "Simeon",
-             "dna": "late-30s Nigerian man, round face, thin moustache, shiny burgundy agbada, gold wristwatch, confident swagger"},
+             "identity": {"ethnicity": "Nigerian", "gender": "man", "age": "late 30s",
+                          "build": "average build", "skin": "warm brown skin",
+                          "hair": "close-cropped black hair", "eyes": "dark brown eyes",
+                          "features": "round face, thin moustache"},
+             "wardrobe": "shiny burgundy agbada with gold wristwatch",
+             "bearing": "confident swagger, expects to be recognised"},
             {"id": "USHER", "name": "The Usher",
-             "dna": "young woman, tall, teal aso-ebi wrapper and gele, clipboard, polite but immovable"},
+             "identity": {"ethnicity": "Nigerian", "gender": "woman", "age": "mid 20s",
+                          "build": "tall, slim", "skin": "deep brown skin",
+                          "hair": "hair wrapped in a gele", "eyes": "dark eyes",
+                          "features": "calm, even features"},
+             "wardrobe": "teal aso-ebi wrapper and gele, holds a clipboard",
+             "bearing": "polite but immovable"},
         ],
         "environments": [
             {"id": "HALL", "name": "Wedding Hall", "desc": "grand owambe hall, chandeliers, round tables, live band on a low stage"},
@@ -195,6 +220,13 @@ def _extract_json(text: str) -> dict:
 def _slug(s: str, fallback: str) -> str:
     out = re.sub(r"[^A-Za-z0-9]+", "_", str(s or "")).strip("_").upper()
     return out or fallback
+
+
+def _identity(raw) -> dict:
+    """Fixed identity keys, always present — a character's permanent physical layer. Keying off
+    camera.IDENTITY_FIELDS keeps this and the dna composer from disagreeing on what the layer is."""
+    src = raw if isinstance(raw, dict) else {}
+    return {k: str(src.get(k) or "").strip() for k in camera.IDENTITY_FIELDS}
 
 
 def _normalize_bible(raw) -> dict:
@@ -287,8 +319,13 @@ def _normalize(data: dict, idea: str) -> dict:
             cid += "_2"
         seen.add(cid)
         chars.append({"id": cid, "name": str(c.get("name") or cid.title()),
-                      "dna": str(c.get("dna") or c.get("description") or ""),
-                      "sheet_prompt": str(c.get("sheet_prompt") or "").strip()})
+                      "identity": _identity(c.get("identity")),
+                      "wardrobe": str(c.get("wardrobe") or "").strip(),
+                      "bearing": str(c.get("bearing") or "").strip(),
+                      # Back-compat: a model that still writes a flat dna keeps it as the
+                      # fallback label; camera.ensure_prompts derives dna from the identity
+                      # layer when the layer is filled, which is the normal path.
+                      "dna": str(c.get("dna") or c.get("description") or "").strip()})
 
     envs, seen_e = [], set()
     for i, e in enumerate(data.get("environments") or []):
@@ -363,8 +400,14 @@ def _normalize(data: dict, idea: str) -> dict:
     }
 
 
-def plan(idea: str, settings=None) -> dict:
-    """Idea + production settings -> structured film plan.
+def plan_stream(idea: str, settings=None):
+    """Idea + production settings -> structured film plan, streamed.
+
+    The one source of truth for how a plan is built and normalized. It is a generator: while
+    the LLM writes, it yields the running character count of the synthesis so far (a heartbeat
+    the director turns into a climbing bar), and returns the finished, normalized plan as the
+    generator's value (PEP 380). `plan()` is the blocking drain of this for callers that don't
+    want the heartbeat.
 
     Real whenever an LLM key exists (text is cents), regardless of MOCK_MODE — that's what
     makes an arbitrary idea produce an actual bespoke screenplay instead of the sample.
@@ -384,11 +427,30 @@ def plan(idea: str, settings=None) -> dict:
                  f"scenes as each scene warrants (1 to {MAX_COVERAGE} each), not evenly\n"
                  f"DIALOGUE LANGUAGE: {language} — write every spoken line in it\n"
                  f"VISUAL IDIOM: {STYLE_PRESETS.get(preset.lower(), preset)}")
+        raw = ""
         try:
-            raw = gb.chat(_SYSTEM, brief, json_mode=True, temperature=0.9)
-            return _normalize(_extract_json(raw), idea)
+            total = 0
+            parts: list[str] = []
+            for delta in gb.chat_stream(_SYSTEM, brief, json_mode=True, temperature=0.9):
+                parts.append(delta)
+                total += len(delta)
+                yield total
+            raw = "".join(parts)
         except Exception:
-            pass  # graceful fallback keeps the demo alive
+            raw = ""  # streaming wire error — fall back to the blocking call below
+        if not raw.strip():
+            # Streaming produced nothing (a provider that rejects stream+json_object, a
+            # transient error). The blocking path is the one we know the provider accepts, so
+            # try it once before giving up on a bespoke screenplay for the sample.
+            try:
+                raw = gb.chat(_SYSTEM, brief, json_mode=True, temperature=0.9)
+            except Exception:
+                raw = ""
+        if raw.strip():
+            try:
+                return _normalize(_extract_json(raw), idea)
+            except Exception:
+                pass  # malformed/short synthesis — graceful fallback keeps the demo alive
     out = _mock(idea, target)
     # The sample ships its coverage hand-written per scene; run it through the same
     # normalizer so both paths produce exactly the same shape.
@@ -396,3 +458,13 @@ def plan(idea: str, settings=None) -> dict:
         s["coverage"] = _normalize_coverage(s.get("coverage"), s)
     out["_source"] = "sample"
     return out
+
+
+def plan(idea: str, settings=None) -> dict:
+    """Blocking drain of `plan_stream` — the film plan without the streaming heartbeat."""
+    gen = plan_stream(idea, settings)
+    try:
+        while True:
+            next(gen)
+    except StopIteration as done:
+        return done.value

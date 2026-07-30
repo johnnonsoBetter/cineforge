@@ -37,9 +37,10 @@ export const SUGGESTIONS = [
   'Two rival food trucks fall in love over one long night market.',
 ];
 
-// Production settings. Each of these reaches generation: length sets the scene count,
-// style leads the prompt's style block, format is the ratio frames are rendered at, and
-// language is the language dialogue is written in.
+// Production settings shown in the hero. Each reaches generation: length sets the scene
+// count, style leads the prompt's style block, format is the ratio frames are rendered at.
+// Dialogue language is not surfaced — it defaults to English in DEFAULT_SETTINGS and rides
+// the payload from there, so the input stays uncluttered.
 export const SETTING_GROUPS = [
   ['length_min', 'Length', [[1, '1 min'], [3, '3 min'], [5, '5 min']]],
   ['style_preset', 'Style', [
@@ -47,9 +48,6 @@ export const SETTING_GROUPS = [
     ['ghibli', 'Ghibli'], ['photorealistic', 'Photoreal'],
   ]],
   ['aspect', 'Format', [['16:9', 'Landscape'], ['9:16', 'Vertical'], ['1:1', 'Square']]],
-  ['language', 'Dialogue', [
-    ['English', 'English'], ['Igbo', 'Igbo'], ['Yoruba', 'Yoruba'], ['Nigerian Pidgin', 'Pidgin'],
-  ]],
 ];
 
 export const DEFAULT_SETTINGS = {

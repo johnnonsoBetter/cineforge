@@ -1,12 +1,28 @@
 import { useEffect, useRef, useState } from 'react';
 import { COVERAGE_OPTIONS } from './ui.js';
 
-// Calling for another setup on a frame that already exists.
+// Calling for more coverage on a frame that already exists — either another setup off the
+// same still (mode 'shot') or a genuinely new still at a new angle (mode 'keyframe').
 //
 // Everything here is optional on purpose: the scene is already staged, so a blank form is
-// a complete request — "shoot it again the way it's written". What you pick only overrides
-// the part you care about, which is how a director actually asks for a shot.
-export default function ShotDialog({ node, at, onClose, onSubmit, onSuggest, busy }) {
+// a complete request — "shoot it the way it's written". What you pick only overrides the
+// part you care about, which is how a director actually asks for a shot. The two modes share
+// this one form; only the framing copy and the honest cost line differ.
+const COPY = {
+  shot: {
+    label: 'New shot',
+    cost: 'One clip · the master frame is reused · nothing goes stale',
+    submit: 'Shoot it', busy: 'Shooting…',
+  },
+  keyframe: {
+    label: 'New angle',
+    cost: 'One still + one clip · a new frame of this scene · nothing goes stale',
+    submit: 'Frame it', busy: 'Framing…',
+  },
+};
+
+export default function ShotDialog({ node, at, mode = 'shot', onClose, onSubmit, onSuggest, busy }) {
+  const copy = COPY[mode] || COPY.shot;
   const [spec, setSpec] = useState({ shot: '', angle: '', move: '', note: '' });
   const [thinking, setThinking] = useState(false);
   const [why, setWhy] = useState(null);   // { note, source, covered }
@@ -58,7 +74,7 @@ export default function ShotDialog({ node, at, onClose, onSubmit, onSuggest, bus
   return (
     <div className="shot-dialog" style={style} ref={ref}>
       <div className="shot-dialog-head">
-        <span className="mono-label">New setup</span>
+        <span className="mono-label">{copy.label}</span>
         <strong>{node.title}</strong>
         <button className="insp-close" onClick={onClose} title="Close">✕</button>
       </div>
@@ -115,13 +131,11 @@ export default function ShotDialog({ node, at, onClose, onSubmit, onSuggest, bus
       </div>
 
       <div className="shot-dialog-foot">
-        {/* The honest cost, stated up front: the master frame is already paid for, so this
-            buys one clip and changes nothing else in the film. */}
-        <span className="mono-label">
-          One clip · the master frame is reused · nothing goes stale
-        </span>
+        {/* The honest cost, stated up front, and it differs by mode: + Setup reuses the paid
+            still and buys one clip; + Keyframe composes a new still and then animates it. */}
+        <span className="mono-label">{copy.cost}</span>
         <button className="btn-gold" onClick={submit} disabled={busy}>
-          {busy ? 'Shooting…' : 'Shoot it'}
+          {busy ? copy.busy : copy.submit}
         </button>
       </div>
     </div>

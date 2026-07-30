@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { KIND_LABEL, STATUS_LABEL, statusColor, isVideo, shortHash } from './ui.js';
+import { verdictColor, needsReview } from './qc.js';
 import Takes from './Takes.jsx';
 import QCPanel from './QCPanel.jsx';
 import StoryBrief from './StoryBrief.jsx';
@@ -44,74 +45,6 @@ function References({ refs, onSelectNode }) {
       <div className="mono-label" style={{ marginTop: 8 }}>
         {structural} structural · {refs.length - structural} in dialogue &amp; action
       </div>
-    </div>
-  );
-}
-
-// What changing this node would actually cost, before committing to it. The split is the
-// product's whole thesis: `rewritten` is text the graph re-resolves for free, `stale` is
-// media that has to be generated — and paid for — a second time.
-const IMPACT_VERB = {
-  story: 'Update', scene: 'Update', character: 'Regenerate',
-  environment: 'Regenerate', keyframe: 'Regenerate', shot: 'Re-render',
-  timeline: 'Re-assemble',
-};
-
-const countByKind = (entries) => {
-  const m = new Map();
-  for (const e of entries || []) m.set(e.kind, (m.get(e.kind) || 0) + 1);
-  return [...m.entries()];
-};
-
-const plural = (n, kind) => {
-  const label = (KIND_LABEL[kind] || kind).toLowerCase();
-  return `${n} ${label}${n === 1 ? '' : 's'}`;
-};
-
-function ImpactPanel({ impact, node, onSelectNode }) {
-  const stale = impact?.stale || [];
-  const rewritten = impact?.rewritten || [];
-  if (!stale.length && !rewritten.length) return null;
-
-  const usedIn = countByKind([...rewritten, ...stale]);
-  const plan = [
-    ...countByKind(rewritten).map(([k, n]) => [`${IMPACT_VERB[k] || 'Update'} ${plural(n, k)}`, false]),
-    ...countByKind(stale).map(([k, n]) => [`${IMPACT_VERB[k] || 'Regenerate'} ${plural(n, k)}`, true]),
-  ];
-
-  return (
-    <div className="insp-section impact">
-      <h3>If you change this</h3>
-      <div className="prose" style={{ fontSize: 14, marginBottom: 10 }}>
-        {node.title} is used in {usedIn.map(([k, n]) => plural(n, k)).join(', ')}.
-      </div>
-
-      <ul className="impact-plan">
-        {plan.map(([text, costs]) => (
-          <li key={text} className={costs ? 'costs' : ''}>
-            <span className="impact-tick">✓</span>{text}
-            {!costs && <span className="impact-free">free</span>}
-          </li>
-        ))}
-        <li className="preserved">
-          <span className="impact-tick">✓</span>
-          Dialogue, cast identity and camera blocking are read from the graph — they carry over
-        </li>
-      </ul>
-
-      {impact.cost_hint && <div className="mono-label impact-cost">{impact.cost_hint}</div>}
-
-      {stale.length > 0 && (
-        <div className="chip-row" style={{ marginTop: 10 }}>
-          {stale.map((s) => (
-            <button key={s.node_id} className="ref-chip" onClick={() => onSelectNode(s.node_id)}
-                    title={`Go to ${s.title}`}>
-              {s.title}
-              <span className="ref-field">{KIND_LABEL[s.kind] || s.kind}</span>
-            </button>
-          ))}
-        </div>
-      )}
     </div>
   );
 }
@@ -203,14 +136,74 @@ function Copyable({ value }) {
   );
 }
 
+// The verifiable chain behind an asset — who rendered it, on what, and the hashes that let
+// anyone check the pixels weren't swapped. Its own tab; every row is evidence, not chrome.
+function Provenance({ asset }) {
+  const prov = asset?.provenance || {};
+  return (
+    <div className="insp-section" style={{ borderBottom: 'none' }}>
+      <dl style={{ margin: '0 0 12px' }}>
+        <div className="kv"><dt>Provider</dt><dd>{prov.provider || '—'}</dd></div>
+        <div className="kv"><dt>Model</dt><dd>{prov.model || '—'}</dd></div>
+        <div className="kv"><dt>Verified</dt><dd style={{ color: prov.verified ? 'var(--green)' : 'var(--amber)' }}>{prov.verified ? 'yes — manifest checked' : 'unverified'}</dd></div>
+        <div className="kv"><dt>Asset ID</dt><dd>{asset.asset_id}</dd></div>
+      </dl>
+
+      <h3 style={{ marginTop: 4 }}>SHA-256</h3>
+      <Copyable value={prov.sha256} />
+
+      <h3 style={{ marginTop: 14 }}>Canonical hash</h3>
+      <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text)' }} title={prov.canonical_hash}>
+        {shortHash(prov.canonical_hash)}
+      </div>
+
+      <h3 style={{ marginTop: 14 }}>Backblaze B2 manifest</h3>
+      <Copyable value={prov.manifest_uri} />
+
+      {(prov.run_id || prov.parent_run_id) && (
+        <>
+          <h3 style={{ marginTop: 14 }}>Run lineage</h3>
+          <div className="kv"><dt>Run</dt>
+            <dd style={{ fontFamily: 'var(--mono)', fontSize: 11 }} title={prov.run_id}>{shortHash(prov.run_id) || '—'}</dd></div>
+          <div className="kv"><dt>Parent</dt>
+            <dd style={{ fontFamily: 'var(--mono)', fontSize: 11 }} title={prov.parent_run_id}>
+              {prov.parent_run_id ? shortHash(prov.parent_run_id) : 'origin'}
+            </dd></div>
+        </>
+      )}
+
+      {prov.prompt && (
+        <>
+          <h3 style={{ marginTop: 14 }}>Generation prompt</h3>
+          <div className="code-block">{prov.prompt}</div>
+        </>
+      )}
+    </div>
+  );
+}
+
 // Kind-specific metadata rows.
 function meta(node) {
   const d = node.data || {};
   switch (node.kind) {
     case 'story':
       return [['Logline', d.logline], ['Style', d.style]];
-    case 'character':
-      return [['Ref ID', d.id], ['Identity', d.dna]];
+    case 'character': {
+      // The identity layer, one row per filled trait, then the separable wardrobe/bearing
+      // layers. A character from before the layers existed carries only a flat dna, so fall
+      // back to that. Empty rows are dropped by the caller.
+      const id = d.identity || {};
+      const idRows = Object.entries(id)
+        .filter(([, v]) => v)
+        .map(([k, v]) => [k[0].toUpperCase() + k.slice(1), v]);
+      return [
+        ['Ref ID', d.id],
+        ...idRows,
+        ['Wardrobe', d.wardrobe],
+        ['Bearing', d.bearing],
+        ...(idRows.length ? [] : [['Identity', d.dna]]),
+      ];
+    }
     case 'environment':
       return [['Ref ID', d.id], ['Plate', d.desc]];
     case 'scene':
@@ -238,24 +231,56 @@ function meta(node) {
   }
 }
 
-export default function Inspector({ node, onClose, onRegenerate, busy, impact,
+export default function Inspector({ node, onClose, onRegenerate, busy,
                                     references, onSelectNode, onSelectEntity, onRename,
-                                    onSelectVersion, onToggleLock, sceneShots, onAcceptQC,
+                                    onSelectVersion, sceneShots, onAcceptQC,
                                     onReviewQC, entityNodes }) {
-  const [provOpen, setProvOpen] = useState(false);
-  if (!node) return null;
-  const entityRefs = node.data?.id ? (references?.[node.data.id] || []) : [];
+  const entityRefs = node?.data?.id ? (references?.[node.data.id] || []) : [];
 
-  const asset = node.asset;
+  const asset = node?.asset;
   const url = asset?.url;
   const video = isVideo(url);
-  const prov = asset?.provenance || {};
-  const rows = meta(node).filter(([, v]) => v != null && v !== '');
-  const canRegen = ['character', 'environment', 'scene', 'keyframe', 'shot'].includes(node.kind);
-  const staleCount = impact?.stale?.length || 0;
+  const rows = meta(node || {}).filter(([, v]) => v != null && v !== '');
+  // Each aspect gets its own tab, but only the ones this node actually has — an empty tab
+  // reads as broken. Beyond the shared review/history/provenance, a node's own information
+  // is split by kind: a scene's cast and coverage, an entity's dependants, a story's brief
+  // each earn a tab rather than stacking inside one long Details scroll.
+  const isEntity = node?.kind === 'character' || node?.kind === 'environment';
+  const hasReview = !!(node?.qc || url);
+  const hasHistory = (node?.versions?.length || 0) >= 2;
+  const hasCast = node?.kind === 'scene' && (node?.data?.cast?.length || 0) > 0;
+  const hasCoverage = node?.kind === 'scene' && (node?.data?.coverage?.length || 0) > 0;
+  const hasUses = isEntity && entityRefs.length > 0;
+  const hasBrief = node?.kind === 'story';
+  // Details keeps the node's own fields and (for entities) rename — the blast radius and the
+  // regenerate/lock controls now live on the conversational rail, next to the input.
+  const hasDetails = rows.length > 0 || isEntity;
+  const tabs = [
+    hasReview && { id: 'review', label: 'Review' },
+    hasHistory && { id: 'history', label: 'History' },
+    hasDetails && { id: 'details', label: 'Details' },
+    hasCast && { id: 'cast', label: 'Cast' },
+    hasCoverage && { id: 'coverage', label: 'Coverage' },
+    hasUses && { id: 'uses', label: 'Used by' },
+    hasBrief && { id: 'brief', label: 'Brief' },
+    asset && { id: 'provenance', label: 'Provenance' },
+  ].filter(Boolean);
+
+  // Open on the gate when it is asking for a decision; otherwise the first tab.
+  const outstanding = node?.qc && needsReview(node.qc.verdict) && !node.data?.qc_override;
+  const [tab, setTab] = useState(outstanding ? 'review' : tabs[0]?.id);
+  // A "compare take N" recommendation from the gate opens History with that take already
+  // loaded into the swipe — so a free checkout is confirmed against the pixels, not blind.
+  const [compareVersion, setCompareVersion] = useState(null);
+  const compareTake = (version) => { setCompareVersion(version); setTab('history'); };
+  // The tab set can shift under a live node (a re-render adds History) — never leave a tab
+  // selected that no longer exists.
+  const active = tabs.some((t) => t.id === tab) ? tab : tabs[0]?.id;
+
+  if (!node) return null;
 
   return (
-    <aside className="inspector">
+    <aside className={`inspector node-${node.kind}`}>
       <div className="insp-head">
         <div style={{ flex: 1 }}>
           <span className="mono-label">{KIND_LABEL[node.kind] || node.kind}</span>
@@ -268,129 +293,94 @@ export default function Inspector({ node, onClose, onRegenerate, busy, impact,
         <button className="insp-close" onClick={onClose} title="Close">✕</button>
       </div>
 
+      {url && (
+        <div className="insp-preview">
+          {video ? (
+            <video src={url} poster={asset.thumbnail} controls playsInline preload="metadata" />
+          ) : (
+            <img src={url} alt={node.title} />
+          )}
+        </div>
+      )}
+
+      {tabs.length > 1 && (
+        <div className="insp-tabs" role="tablist">
+          {tabs.map((t) => (
+            <button
+              key={t.id}
+              role="tab"
+              aria-selected={active === t.id}
+              className={`insp-tab ${active === t.id ? 'active' : ''}`}
+              onClick={() => setTab(t.id)}
+            >
+              {/* The verdict now lives behind a tab, so carry its colour out to the tab —
+                  a red dot here is the only cue a hidden gate is failing. */}
+              {t.id === 'review' && node.qc && (
+                <span className="insp-tab-dot" style={{ background: verdictColor(node.qc.verdict) }} />
+              )}
+              {t.label}
+            </button>
+          ))}
+        </div>
+      )}
+
       <div className="insp-scroll">
-        {url && (
-          <div className="insp-preview">
-            {video ? (
-              <video src={url} poster={asset.thumbnail} controls playsInline preload="metadata" />
-            ) : (
-              <img src={url} alt={node.title} />
+        {active === 'review' && (
+          <QCPanel
+            node={node}
+            report={node.qc}
+            busy={busy}
+            onSelectNode={onSelectNode}
+            onRegenerate={onRegenerate}
+            onAccept={onAcceptQC}
+            onReview={onReviewQC}
+            onCompareVersion={compareTake}
+          />
+        )}
+
+        {active === 'history' && (
+          <Takes node={node} onSelectVersion={onSelectVersion} busy={busy}
+                 focusVersion={compareVersion} />
+        )}
+
+        {active === 'details' && (
+          <>
+            {rows.length > 0 && (
+              <div className="insp-section">
+                <h3>Details</h3>
+                <dl style={{ margin: 0 }}>
+                  {rows.map(([k, v]) => (
+                    <div className="kv" key={k}>
+                      <dt>{k}</dt>
+                      <dd>{v}</dd>
+                    </div>
+                  ))}
+                </dl>
+              </div>
             )}
-          </div>
+
+            {isEntity && <RenameBox node={node} onRename={onRename} busy={busy} />}
+          </>
         )}
 
-        <QCPanel
-          node={node}
-          report={node.qc}
-          busy={busy}
-          onSelectNode={onSelectNode}
-          onRegenerate={onRegenerate}
-          onAccept={onAcceptQC}
-          onReview={onReviewQC}
-        />
-
-        <Takes node={node} onSelectVersion={onSelectVersion} busy={busy} />
-
-        {canRegen && <ImpactPanel impact={impact} node={node} onSelectNode={onSelectNode} />}
-
-        {rows.length > 0 && (
-          <div className="insp-section">
-            <h3>Details</h3>
-            <dl style={{ margin: 0 }}>
-              {rows.map(([k, v]) => (
-                <div className="kv" key={k}>
-                  <dt>{k}</dt>
-                  <dd>{v}</dd>
-                </div>
-              ))}
-            </dl>
-          </div>
+        {active === 'cast' && (
+          <CastChips cast={node.data?.cast} onSelectEntity={onSelectEntity} />
         )}
 
-        {node.kind === 'story' && (
+        {active === 'coverage' && (
+          <SceneCoverage node={node} onSelectNode={onSelectNode} shotsByIndex={sceneShots} />
+        )}
+
+        {active === 'uses' && (
+          <References refs={entityRefs} onSelectNode={onSelectNode} />
+        )}
+
+        {active === 'brief' && (
           <StoryBrief node={node} entityNodes={entityNodes} onSelectNode={onSelectNode} />
         )}
 
-        {node.kind === 'scene' && (
-          <>
-            <CastChips cast={node.data?.cast} onSelectEntity={onSelectEntity} />
-            <SceneCoverage node={node} onSelectNode={onSelectNode} shotsByIndex={sceneShots} />
-          </>
-        )}
-
-        {(node.kind === 'character' || node.kind === 'environment') && (
-          <>
-            <References refs={entityRefs} onSelectNode={onSelectNode} />
-            <RenameBox node={node} onRename={onRename} busy={busy} />
-          </>
-        )}
-
-        {asset && (
-          <>
-            <button className="drawer-toggle" onClick={() => setProvOpen((o) => !o)}>
-              Provenance
-              {prov.verified && (
-                <span style={{ color: 'var(--green)', marginLeft: 8, letterSpacing: '0.06em' }}>✓ verified</span>
-              )}
-              <span className={`drawer-caret ${provOpen ? 'open' : ''}`}>▶</span>
-            </button>
-            {provOpen && (
-              <div className="insp-section drawer-body" style={{ borderTop: 'none' }}>
-                <dl style={{ margin: '0 0 12px' }}>
-                  <div className="kv"><dt>Provider</dt><dd>{prov.provider || '—'}</dd></div>
-                  <div className="kv"><dt>Model</dt><dd>{prov.model || '—'}</dd></div>
-                  <div className="kv"><dt>Verified</dt><dd style={{ color: prov.verified ? 'var(--green)' : 'var(--amber)' }}>{prov.verified ? 'yes — manifest checked' : 'unverified'}</dd></div>
-                  <div className="kv"><dt>Asset ID</dt><dd>{asset.asset_id}</dd></div>
-                </dl>
-
-                <h3 style={{ marginTop: 4 }}>SHA-256</h3>
-                <Copyable value={prov.sha256} />
-
-                <h3 style={{ marginTop: 14 }}>Canonical hash</h3>
-                <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text)' }} title={prov.canonical_hash}>
-                  {shortHash(prov.canonical_hash)}
-                </div>
-
-                <h3 style={{ marginTop: 14 }}>Backblaze B2 manifest</h3>
-                <Copyable value={prov.manifest_uri} />
-
-                {prov.prompt && (
-                  <>
-                    <h3 style={{ marginTop: 14 }}>Generation prompt</h3>
-                    <div className="code-block">{prov.prompt}</div>
-                  </>
-                )}
-              </div>
-            )}
-          </>
-        )}
+        {active === 'provenance' && asset && <Provenance asset={asset} />}
       </div>
-
-      {canRegen && (
-        <div className="insp-foot">
-          {/* The cost rides on the button you actually press, so nobody spends a re-render
-              they didn't mean to. */}
-          <button
-            className="btn-gold"
-            disabled={busy || node.locked || node.status === 'running'}
-            onClick={() => onRegenerate(node)}
-          >
-            {node.status === 'running' ? 'Working…'
-              : node.locked ? '🔒 Locked'
-              : staleCount ? `↻ Regenerate · ${staleCount} downstream`
-              : '↻ Regenerate'}
-          </button>
-          <button
-            className="btn insp-lock"
-            onClick={() => onToggleLock(!node.locked)}
-            title={node.locked
-              ? 'Unlock so this can be regenerated again'
-              : 'Lock this take — every regeneration will skip it'}
-          >
-            {node.locked ? 'Unlock' : 'Lock'}
-          </button>
-        </div>
-      )}
     </aside>
   );
 }

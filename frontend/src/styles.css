@@ -138,6 +138,9 @@ button:disabled { cursor: default; }
   padding: 0 20px;
   border-right: 1px solid var(--line);
 }
+/* Empty state has no rail beneath it, so the brand shouldn't reserve the rail column or
+   draw the divider that used to meet its edge — it sits as its own label instead. */
+.app.empty .brand { width: auto; border-right: none; }
 .brand-mark {
   font-family: var(--serif);
   font-size: 23px;
@@ -293,6 +296,74 @@ button:disabled { cursor: default; }
   text-transform: uppercase;
   color: var(--muted);
 }
+
+/* ---------- regeneration menu ----------
+   Sits just above the composer when a rendered entity is selected. It carries what the old
+   side-panel Regenerate carried — the blast radius, the redo, the lock — but on the layer the
+   director is already talking on, and with a one-off "skip" per dependency the side panel
+   never had. */
+.regen-menu {
+  margin-bottom: 11px;
+  padding: 11px 12px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  background: var(--gold-soft);
+}
+
+.regen-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.regen-lock {
+  border: 1px solid var(--line);
+  background: transparent;
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  cursor: pointer;
+}
+.regen-lock:hover { border-color: var(--line-strong); color: var(--cream); }
+.regen-lock.on { color: var(--gold); border-color: rgba(228, 165, 85, 0.4); }
+
+.regen-sum { font-family: var(--serif); font-size: 13px; line-height: 1.42; color: var(--text); }
+
+.regen-deps { display: grid; gap: 5px; margin-top: 9px; }
+.regen-dep {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  border: 1px solid rgba(215, 155, 74, 0.4);
+  background: rgba(215, 155, 74, 0.08);
+  border-radius: 8px;
+  padding: 5px 10px;
+  cursor: pointer;
+}
+.regen-dep:hover { border-color: var(--amber); }
+.regen-dep-title { font-size: 12.5px; color: var(--cream); }
+.regen-dep-kind {
+  font-family: var(--mono);
+  font-size: 8.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.regen-dep-state {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: 8.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--amber);
+}
+/* Skipped: kept as it is this pass — reads quiet and struck, and the verdict flips to green. */
+.regen-dep.skipped { border-color: var(--line); background: rgba(0, 0, 0, 0.18); }
+.regen-dep.skipped .regen-dep-title { color: var(--faint); text-decoration: line-through; }
+.regen-dep.skipped .regen-dep-state { color: var(--green); }
+
+.regen-go { width: 100%; height: 35px; margin-top: 10px; }
 
 /* ---------- @-reference picker ---------- */
 
@@ -489,11 +560,56 @@ button:disabled { cursor: default; }
 }
 
 .hero-card {
+  position: relative;
   margin-top: 38px;
   border: 1px solid var(--line);
   border-radius: 17px;
   background: linear-gradient(180deg, var(--surface) 0%, #292319 100%);
   padding: 22px 24px 20px;
+}
+
+/* While the first story is being written the card wears a live border — a bright arc of
+   gold sweeping around its edge, over a soft breathing glow — so the empty state reads as
+   "the director is working" rather than a frozen input. The ring is a masked conic gradient
+   whose angle is animated; the mask keeps only the 2px perimeter, so the text is untouched. */
+@property --forge-angle {
+  syntax: '<angle>';
+  inherits: false;
+  initial-value: 0deg;
+}
+.hero-card.forging {
+  border-color: transparent;
+  animation: forge-glow 2.6s ease-in-out infinite;
+}
+.hero-card.forging::before {
+  content: "";
+  position: absolute;
+  inset: -1.5px;
+  border-radius: 18px;
+  padding: 2px;
+  background: conic-gradient(from var(--forge-angle),
+      transparent 0deg,
+      color-mix(in srgb, var(--gold) 55%, transparent) 45deg,
+      var(--gold) 85deg,
+      #f4d69b 105deg,
+      color-mix(in srgb, var(--gold) 55%, transparent) 150deg,
+      transparent 220deg,
+      transparent 360deg);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+          mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+          mask-composite: exclude;
+  animation: forge-spin 2.6s linear infinite;
+  pointer-events: none;
+}
+@keyframes forge-spin { to { --forge-angle: 360deg; } }
+@keyframes forge-glow {
+  0%, 100% { box-shadow: 0 0 22px -8px color-mix(in srgb, var(--gold) 45%, transparent); }
+  50%      { box-shadow: 0 0 40px -4px color-mix(in srgb, var(--gold) 62%, transparent); }
+}
+/* Browsers without @property still get the breathing glow; the ring just holds a fixed angle. */
+@supports not (background: conic-gradient(from var(--forge-angle), red, blue)) {
+  .hero-card.forging::before { animation: none; }
 }
 .hero-card textarea {
   width: 100%;
@@ -574,13 +690,70 @@ button:disabled { cursor: default; }
 .node.stale .node-media, .node.stale .node-body { opacity: 0.5; }
 .node.flagged { border-color: rgba(201, 112, 92, 0.45); }
 
+/* ---- stage identity ----
+   Each pipeline layer wears a muted accent so the eye can tell a Scene from a Keyframe from a
+   Shot at a glance — a colored spine down the card edge (reads at canvas zoom) and a swatch +
+   tinted label in the header (reads up close). Hues are desaturated to sit inside the warm
+   palette rather than fight it. --stage is the one knob per kind. */
+.node-story       { --stage: #d8a24a; }  /* the seed — gold */
+.node-character   { --stage: #cf8f6b; }  /* cast — terracotta */
+.node-environment { --stage: #82a06a; }  /* location — sage */
+.node-scene       { --stage: #6f97ac; }  /* scene — steel blue */
+.node-keyframe    { --stage: #9d8ac4; }  /* master frame — periwinkle */
+.node-shot        { --stage: #d0a05c; }  /* coverage — copper */
+.node-timeline    { --stage: #c9b78f; }  /* final cut — silver-cream */
+
+/* ---- shape per stage ----
+   The warm palette is shared; a card type is told apart by its silhouette, not a neon hue.
+   A keyframe is the master frame, so its card is wider and the frame dominates it. A cast
+   sheet is an identity portrait, so its thumb stands tall. A location plate is a widescreen
+   establishing view (the default 16/9). A scene carries no frame at all. */
+.node-keyframe { width: 322px; }
+.node-keyframe .node-media { aspect-ratio: 16 / 9; }
+/* A cast sheet leans to a portrait crop (an identity view), a location plate stays widescreen
+   (an establishing view). Kept close to the shared row height so the cast column still stacks
+   on one pitch — see CAST_CARD_H in layout.js. */
+/* A cast sheet is a first-class asset, not a document embedded in a frame. The multi-view page
+   floats on a warm mat with breathing room and a soft drop shadow — a printed concept sheet set
+   on a table — instead of being boxed by the hard media rules the other stages wear. Square, so
+   the sheet (a 2×2 turnaround) fills the face and the artwork dominates the card. */
+.node-character .node-media {
+  aspect-ratio: 1 / 1;
+  padding: 14px;
+  background: #241e18;
+  border-top: none;
+  border-bottom: none;
+}
+.node-character:hover { transform: translateY(-3px); }
+
+/* Colored spine down the left edge, clipped by the card's rounded corners. */
+.node::before {
+  content: "";
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 3px;
+  z-index: 3;
+  background: var(--stage, var(--gold-dim));
+  opacity: 0.9;
+}
+.node.stale::before { opacity: 0.45; }
+
 .node-head {
   display: flex;
   align-items: center;
   gap: 8px;
   padding: 10px 12px 9px;
+  /* Stage-tinted label band — the signal that reads even at canvas zoom. */
+  background: color-mix(in srgb, var(--stage, transparent) 15%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--stage, var(--line)) 34%, var(--line));
 }
-.node-kind { flex: 1; font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--muted); }
+.node-kind { display: flex; align-items: center; gap: 7px; flex: 1; font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.18em; text-transform: uppercase; color: color-mix(in srgb, var(--stage, var(--muted)) 62%, var(--muted)); }
+.node-kind::before {
+  content: "";
+  width: 7px; height: 7px; flex: none;
+  border-radius: 2px;
+  background: var(--stage, var(--gold-dim));
+}
 .node-status { display: flex; align-items: center; gap: 5px; font-family: var(--mono); font-size: 9px; letter-spacing: 0.1em; text-transform: uppercase; }
 
 .node-media {
@@ -592,6 +765,19 @@ button:disabled { cursor: default; }
   overflow: hidden;
 }
 .node-media img { width: 100%; height: 100%; object-fit: cover; display: block; }
+/* A cast sheet is a multi-view reference (front / 3⁄4 / side / close-up), not a single frame —
+   crop-to-fill would clip whole views, so show the sheet whole. Rounded + shadowed so it reads
+   as a page resting on the mat, and it eases up on hover for a premium, tactile lift. */
+.node-character .node-media img {
+  object-fit: contain;
+  border-radius: 8px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.42);
+  transition: transform 0.32s cubic-bezier(0.16, 0.9, 0.24, 1), box-shadow 0.32s ease;
+}
+.node-character:hover .node-media img {
+  transform: scale(1.025);
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.5);
+}
 .node-media.empty { display: flex; align-items: center; justify-content: center; }
 
 .node-play {
@@ -606,8 +792,136 @@ button:disabled { cursor: default; }
   color: var(--cream);
 }
 
+/* The keyframe's verdict, floated over the frame's top-right corner — a translucent, tinted
+   pill so the gate result reads at a glance without a prose row stealing height below. */
+.qc-overlay {
+  position: absolute;
+  top: 8px; right: 8px;
+  display: flex; align-items: center; gap: 4px;
+  padding: 3px 8px;
+  border: 1px solid currentColor;
+  border-radius: 6px;
+  background: rgba(20, 16, 12, 0.72);
+  backdrop-filter: blur(3px);
+  font-family: var(--mono); font-size: 9px; letter-spacing: 0.08em; text-transform: uppercase;
+  line-height: 1;
+}
+
+/* ---- generation lifecycle: skeleton → review scan → verdict ----
+   A running card should feel like a film being made, not a spinner on a gray box. Each loader
+   is tinted with the card's own --stage accent, so a cast sheet, a keyframe and a shot glow in
+   their own colour while they work — the canvas reads as a set with several units in motion. */
+
+/* The shimmer that holds a frame's shape until the first take lands. */
+.media-skeleton {
+  position: absolute; inset: 0;
+  background-color: #201b16;
+  background-image: linear-gradient(100deg,
+    transparent 26%,
+    color-mix(in srgb, var(--stage, var(--gold)) 26%, transparent) 47%,
+    color-mix(in srgb, var(--stage, var(--gold)) 10%, transparent) 56%,
+    transparent 76%);
+  background-size: 220% 100%;
+  background-repeat: no-repeat;
+  animation: shimmer 1.45s linear infinite;
+}
+@keyframes shimmer {
+  from { background-position: 165% 0; }
+  to   { background-position: -65% 0; }
+}
+
+/* The gate looking a finished frame over — a bright band sweeping down the still. */
+.media-scan {
+  position: absolute; inset: 0;
+  pointer-events: none;
+  background: linear-gradient(180deg,
+    transparent 0%,
+    color-mix(in srgb, var(--stage, var(--gold)) 52%, transparent) 47%,
+    color-mix(in srgb, var(--stage, var(--gold)) 12%, transparent) 54%,
+    transparent 100%);
+  background-size: 100% 44%;
+  background-repeat: no-repeat;
+  mix-blend-mode: screen;
+  animation: scan 1.3s ease-in-out infinite;
+}
+@keyframes scan {
+  0%   { background-position: 0 -48%; }
+  100% { background-position: 0 148%; }
+}
+.node-media.reviewing {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--stage, var(--gold)) 42%, transparent);
+}
+
+/* What the card is doing right now, in its own words — sits over the frame, bottom-left. */
+.media-phase {
+  position: absolute;
+  left: 8px; bottom: 8px;
+  z-index: 2;
+  display: flex; align-items: center; gap: 6px;
+  max-width: calc(100% - 16px);
+  padding: 3px 9px;
+  border-radius: 6px;
+  background: rgba(20, 16, 12, 0.82);
+  backdrop-filter: blur(3px);
+  border: 1px solid color-mix(in srgb, var(--stage, var(--gold)) 34%, var(--line));
+  font-family: var(--mono); font-size: 9px; letter-spacing: 0.1em; text-transform: uppercase;
+  color: color-mix(in srgb, var(--stage, var(--cream)) 45%, var(--cream));
+  white-space: nowrap;
+}
+.media-phase.mini {
+  left: 50%; transform: translateX(-50%);
+  bottom: 7px; padding: 2px 8px; font-size: 8.5px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .media-skeleton, .media-scan { animation: none; }
+}
+
+/* ---- compact shot card ----
+   A clip reads as a video card, not a pipeline card: the frame is the whole face, with a slim
+   caption under it. No header band, no stats grid, no verdict prose — the frame runs edge to
+   edge and the two lines below say which setup it is and, only if the gate flagged it, what. */
+.shot-card .node-media { border-top: none; aspect-ratio: 16 / 9; }
+.shot-badge {
+  position: absolute;
+  top: 8px; left: 8px;
+  display: flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px;
+  border-radius: 50%;
+  background: rgba(20, 16, 12, 0.78);
+  backdrop-filter: blur(3px);
+}
+.shot-lock { position: absolute; top: 8px; left: 30px; font-size: 10px; opacity: 0.85; }
+.shot-foot {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 9px 11px 10px;
+}
+.shot-foot-top { display: flex; align-items: baseline; gap: 8px; }
+.shot-foot .node-title {
+  flex: 1; min-width: 0;
+  font-size: 13.5px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.shot-flag {
+  flex: none;
+  font-family: var(--mono);
+  font-size: 9px; letter-spacing: 0.06em; text-transform: uppercase;
+}
+.shot-setup {
+  font-family: var(--mono);
+  font-size: 9.5px; letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--faint);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
 .node-body { padding: 11px 12px 13px; }
 .node-title { font-family: var(--serif); font-size: 15.5px; line-height: 1.3; color: var(--cream); }
+/* A scene has no frame, so its title is the card's face — set it larger and let the synopsis
+   sit clearly beneath it, apart from the production tags. */
+.node-scene .node-title { font-size: 18px; line-height: 1.25; }
+.node-scene .node-desc { margin-top: 8px; }
 .node-desc {
   margin-top: 6px;
   font-size: 12px;
@@ -636,12 +950,137 @@ button:disabled { cursor: default; }
   font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.08em;
 }
 
+/* ---- founding-reference face (character / environment) ---- */
+/* The weight marker that separates a sheet card from a keyframe card. */
+.node-founding-mark {
+  font-family: var(--mono);
+  font-size: 8.5px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--gold-dim);
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  padding: 2px 6px;
+}
+/* A one-line tagline under the title — the reference's identity in a phrase (a character's
+   DNA, a location's look), the way a call sheet names it. Clamped so it never grows the card. */
+.node-founding-tag {
+  margin-top: 5px;
+  font-family: var(--serif);
+  font-style: italic;
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: var(--muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* The signature strip, condensed to three cells: status · version, manifest, lock. Step and
+   content-addressed storage fold into the status cell's tooltip. Middot separators are drawn
+   between cells so the row reads as one line even when it wraps. */
+.node-founding-foot {
+  margin-top: 10px;
+  padding-top: 9px;
+  border-top: 1px solid #362e25;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.05em;
+  row-gap: 4px;
+}
+.ff-cell { display: inline-flex; align-items: center; color: var(--muted); }
+.ff-cell:not(:first-child)::before {
+  content: "·";
+  margin: 0 7px;
+  color: var(--faint);
+}
+.ff-mark { width: 5px; height: 5px; margin-right: 4px; flex: none; }
+.spinner.ff-mark { width: 8px; height: 8px; }
+
 .spinner {
   width: 9px; height: 9px; flex: none;
   border: 1.5px solid rgba(228, 165, 85, 0.28);
   border-top-color: var(--gold);
   border-radius: 50%;
   animation: spin 0.7s linear infinite;
+}
+
+/* ---------- coverage group ----------
+   The frame behind a scene's setups. Copper-tinted, to echo the shot column it wraps, and
+   dashed so it reads as a soft grouping rather than another card. It never takes a pointer —
+   the cards on top own every click. */
+.coverage-group {
+  box-sizing: border-box;
+  border: 1px dashed color-mix(in srgb, #d0a05c 42%, transparent);
+  border-radius: 20px;
+  background: color-mix(in srgb, #d0a05c 6%, transparent);
+  pointer-events: none;
+}
+.coverage-group-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 15px 18px 0;
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+.cg-kind {
+  display: flex; align-items: center; gap: 7px;
+  color: color-mix(in srgb, #d0a05c 72%, var(--muted));
+}
+.cg-kind::before {
+  content: "";
+  width: 7px; height: 7px; flex: none;
+  border-radius: 2px;
+  background: #d0a05c;
+}
+.cg-scene {
+  font-family: var(--serif);
+  font-size: 13px;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--cream);
+}
+.cg-count {
+  margin-left: auto;
+  color: var(--faint);
+  border: 1px solid color-mix(in srgb, #d0a05c 30%, var(--line));
+  border-radius: 5px;
+  padding: 2px 7px;
+}
+
+/* The scene spine — its own look, gold rather than copper, and a solid (not dashed) edge so
+   it reads as the film's backbone rather than another loose grouping. A faint top-to-bottom
+   wash gives the column depth without competing with the cards sitting on it. */
+.coverage-group.scene-group {
+  border: 1px solid color-mix(in srgb, var(--gold) 34%, transparent);
+  border-radius: 22px;
+  background:
+    linear-gradient(180deg,
+      color-mix(in srgb, var(--gold) 9%, transparent),
+      color-mix(in srgb, var(--gold) 3%, transparent));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--gold) 7%, transparent);
+}
+.scene-group .coverage-group-head {
+  padding-bottom: 4px;
+}
+.scene-group .cg-kind {
+  color: color-mix(in srgb, var(--gold) 82%, var(--cream));
+  letter-spacing: 0.2em;
+}
+.scene-group .cg-kind::before {
+  background: var(--gold);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--gold) 55%, transparent);
+}
+.scene-group .cg-count {
+  border-color: color-mix(in srgb, var(--gold) 34%, var(--line));
+  color: color-mix(in srgb, var(--gold) 60%, var(--muted));
 }
 
 /* ---------- inspector ---------- */
@@ -679,6 +1118,35 @@ button:disabled { cursor: default; }
 
 .insp-preview { background: #16130f; border-bottom: 1px solid var(--line); }
 .insp-preview img, .insp-preview video { width: 100%; display: block; aspect-ratio: 16 / 9; object-fit: cover; background: #16130f; }
+/* The founding character sheet is a full multi-view reference — show it whole (its own aspect),
+   never cropped into the 16/9 frame the way a single rendered shot is. */
+.inspector.node-character .insp-preview img { aspect-ratio: auto; object-fit: contain; }
+
+.insp-tabs {
+  flex: none;
+  display: flex;
+  background: var(--bg-topbar);
+  border-bottom: 1px solid var(--line);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.insp-tabs::-webkit-scrollbar { display: none; }
+.insp-tab {
+  /* Grow to fill the bar when there are only a few tabs; keep their label width and let the
+     bar scroll once a rich node (scene, entity) has more than fit across 388px. */
+  flex: 1 0 auto;
+  white-space: nowrap;
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  padding: 11px 12px;
+  border: none; border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  font-family: var(--mono); font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase;
+  cursor: pointer;
+}
+.insp-tab:hover { color: var(--cream); }
+.insp-tab.active { color: var(--gold); border-bottom-color: var(--gold); }
+.insp-tab-dot { width: 6px; height: 6px; border-radius: 50%; flex: none; }
 
 .insp-section { padding: 15px 16px; border-bottom: 1px solid var(--line); }
 .insp-section h3 { margin: 0 0 11px; font-family: var(--mono); font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--muted); font-weight: 400; }
@@ -1203,34 +1671,38 @@ button:disabled { cursor: default; }
 .diff-stat .del { color: var(--red); }
 .diff-stat .none { color: var(--faint); }
 
-.diff-body {
-  padding: 9px 11px;
+.diff-changes {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+.diff-change {
+  padding: 5px 9px 5px 22px;
+  text-indent: -13px;      /* hang the +/− marker into the left gutter */
   border: 1px solid var(--line);
-  border-radius: 7px;
+  border-radius: 6px;
   background: rgba(0, 0, 0, 0.22);
   font-family: var(--mono);
   font-size: 11.5px;
-  line-height: 1.65;
-  color: var(--muted);
-  max-height: 190px;
-  overflow-y: auto;
-  word-break: break-word;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
 }
-.d-same { color: var(--muted); }
-.d-add {
-  color: var(--green);
-  background: rgba(134, 176, 107, 0.14);
-  border-radius: 3px;
-  padding: 1px 2px;
-}
-.d-del {
+.dc-del {
   color: var(--red);
-  background: rgba(201, 112, 92, 0.14);
-  border-radius: 3px;
-  padding: 1px 2px;
   text-decoration: line-through;
-  text-decoration-color: rgba(201, 112, 92, 0.55);
+  text-decoration-color: rgba(201, 112, 92, 0.5);
 }
+.dc-add { color: var(--green); }
+.dc-arrow { color: var(--faint); margin: 0 6px; }
+.dc-mark { margin-right: 6px; }
+.dc-mark.add { color: var(--green); }
+.dc-mark.del { color: var(--red); }
+.diff-same { margin-top: 2px; }
 
 .checkout { width: 100%; margin-top: 12px; height: 36px; font-size: 13px; }
 
@@ -1567,6 +2039,66 @@ button:disabled { cursor: default; }
   line-height: 1.4;
 }
 
+/* ---- the gate, folded into the monitor ----
+   Same decision the old floating card asked for — keep/approve, or hold — compacted to the
+   board's width and set off from the rows by a hairline. Amber when the gate is held. */
+.mon-gate {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 9px;
+}
+
+.mon-gate-sum {
+  font-family: var(--serif);
+  font-size: 13px;
+  line-height: 1.42;
+  color: var(--text);
+}
+
+.mon-gate-blockers { display: grid; gap: 5px; }
+.mon-blocker {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  border: 1px solid rgba(215, 155, 74, 0.4);
+  background: rgba(215, 155, 74, 0.08);
+  border-radius: 7px;
+  padding: 5px 9px;
+  cursor: pointer;
+}
+.mon-blocker:hover { border-color: var(--amber); background: rgba(215, 155, 74, 0.14); }
+.mon-blocker b { font-weight: 400; font-size: 12px; color: var(--cream); }
+.mon-blocker span {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: 8.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--amber);
+}
+.mon-blocker em { font-style: normal; color: var(--faint); }
+
+.mon-gate-note {
+  width: 100%;
+  height: 32px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: rgba(0, 0, 0, 0.22);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 12.5px;
+  padding: 0 10px;
+}
+.mon-gate-note:focus { outline: none; border-color: var(--gold-dim); }
+
+.mon-gate-actions { display: flex; gap: 8px; }
+.mon-gate-actions .btn-gold { flex: 1; }
+.mon-gate-actions .btn-gold, .mon-gate-actions .btn { height: 33px; }
+
 /* ---- impact: the blast radius of a change ---- */
 
 /* Selecting a node splits the canvas into what changes and what can't be reached. */
@@ -1583,36 +2115,6 @@ button:disabled { cursor: default; }
   stroke: rgba(215, 155, 74, 0.8);
   stroke-width: 2px;
 }
-
-.insp-section.impact { background: rgba(215, 155, 74, 0.045); }
-
-.impact-plan { list-style: none; margin: 0; padding: 0; }
-.impact-plan li {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  padding: 5px 0;
-  font-size: 13.5px;
-  color: var(--text);
-  line-height: 1.45;
-}
-.impact-plan li.costs { color: var(--amber); }
-.impact-plan li.preserved { color: var(--muted); font-size: 12.5px; }
-.impact-tick { color: var(--green); flex: none; }
-.impact-plan li.costs .impact-tick { color: var(--amber); }
-
-.impact-free {
-  font-family: var(--mono);
-  font-size: 9.5px;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--green);
-  border: 1px solid rgba(134, 176, 107, 0.35);
-  border-radius: 999px;
-  padding: 1px 6px;
-}
-
-.impact-cost { margin-top: 10px; color: var(--amber); }
 
 @media (prefers-reduced-motion: reduce) {
   * { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
@@ -1762,6 +2264,36 @@ button:disabled { cursor: default; }
   color: var(--faint);
 }
 
+/* The recommended action: the cheapest thing that resolves this verdict. Leads the action
+   row so the director never defaults to paying for a re-render. */
+.qc-rec {
+  margin-top: 13px;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-left: 2px solid var(--gold);
+  border-radius: 0 7px 7px 0;
+  background: var(--gold-soft);
+}
+.qc-rec.select, .qc-rec.accept { border-left-color: var(--green); background: rgba(134, 176, 107, 0.06); }
+.qc-rec.flag { border-left-color: var(--red); background: rgba(201, 112, 92, 0.07); }
+
+.qc-rec-head { display: flex; align-items: baseline; gap: 8px; }
+.qc-rec-tag {
+  font-family: var(--mono); font-size: 8.5px; letter-spacing: 0.14em;
+  text-transform: uppercase; color: var(--gold);
+}
+.qc-rec.select .qc-rec-tag, .qc-rec.accept .qc-rec-tag { color: var(--green); }
+.qc-rec.flag .qc-rec-tag { color: var(--red); }
+.qc-rec-cost { margin-left: auto; font-family: var(--mono); font-size: 9.5px; color: var(--faint); }
+.qc-rec-why { margin-top: 6px; font-size: 12.5px; line-height: 1.5; color: var(--muted); }
+.qc-rec button { margin-top: 10px; width: 100%; height: 34px; font-size: 12.5px; }
+
+.qc-actions-label {
+  margin-top: 14px;
+  font-family: var(--mono); font-size: 9px; letter-spacing: 0.14em;
+  text-transform: uppercase; color: var(--faint);
+}
+.qc-actions-label + .qc-actions { margin-top: 7px; }
 .qc-actions { display: flex; gap: 8px; margin-top: 13px; }
 .qc-actions button { flex: 1; height: 34px; font-size: 12.5px; }
 
@@ -1909,77 +2441,159 @@ button:disabled { cursor: default; }
    what the gate is holding.
 */
 
-.gatecard {
-  margin-bottom: 12px;
-  border: 1px solid var(--line-strong);
-  border-radius: 13px;
-  background: var(--surface);
-  padding: 13px 14px 12px;
-  animation: rise 0.34s cubic-bezier(0.2, 0.8, 0.25, 1);
+/* Anchored to the left edge of the canvas, vertically centered — riding the seam where the
+   director rail meets the stage. Collapsed it is a small pill; Review opens a compact popover
+   below it. The whole menu stays centered on that edge and is never full-height, so it reads
+   as a tab on the conversation, not a wall over the cards. */
+.gate {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 15;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
 }
-.gatecard.held { border-color: rgba(215, 155, 74, 0.5); background: rgba(215, 155, 74, 0.07); }
 
-.gatecard-head { display: flex; align-items: center; gap: 8px; margin-bottom: 7px; }
-.gatecard-stage {
+/* ---- the pill ---- */
+.gate-fab {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 33px;
+  padding: 0 5px 0 13px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: rgba(38, 32, 25, 0.94);
+  backdrop-filter: blur(14px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  color: var(--cream);
+  animation: rise 0.3s cubic-bezier(0.2, 0.8, 0.25, 1);
+}
+/* Draw the eye to a waiting checkpoint without blocking anything — a slow breath while closed. */
+.gate:not(.open) .gate-fab { animation: rise 0.3s cubic-bezier(0.2, 0.8, 0.25, 1), breathe 2.6s ease-in-out 0.3s infinite; }
+.gate.held .gate-fab { border-color: rgba(215, 155, 74, 0.5); }
+.gate-fab:hover { border-color: var(--gold); }
+
+.gate-fab-label {
   font-family: var(--mono);
   font-size: 10px;
   letter-spacing: 0.14em;
   text-transform: uppercase;
-  color: var(--cream);
+  color: var(--text);
 }
-.gatecard-verdict {
+.gate-fab-count {
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: rgba(215, 155, 74, 0.18);
+  color: var(--amber);
+  font-family: var(--mono);
+  font-size: 10px;
+}
+.gate-fab-cue {
   font-family: var(--mono);
   font-size: 9.5px;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
-  color: var(--faint);
-  margin-left: auto;
+  color: #2a1f0f;
+  background: var(--gold);
+  border-radius: 999px;
+  padding: 4px 11px;
 }
+.gate.open .gate-fab-cue { background: var(--surface-3); color: var(--muted); letter-spacing: 0; padding: 4px 9px; }
 
-.gatecard-sum { font-size: 12.5px; line-height: 1.5; color: var(--text); }
+/* ---- the popover ---- */
+.gate-panel {
+  width: 322px;
+  max-width: calc(100vw - 32px);
+  margin-top: 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: 13px;
+  background: rgba(38, 32, 25, 0.97);
+  backdrop-filter: blur(16px);
+  box-shadow: 0 16px 46px rgba(0, 0, 0, 0.5), 0 0 30px rgba(228, 165, 85, 0.08);
+  overflow: hidden;
+  animation: rise 0.2s ease-out;
+}
+.gate.held .gate-panel { box-shadow: 0 16px 46px rgba(0, 0, 0, 0.5), 0 0 30px rgba(215, 155, 74, 0.12); }
+
+/* The verdict, read before a word is: a hairline of the reviewer's color across the top. */
+.gate-accent { height: 2px; background: var(--green); }
+.gate.held .gate-accent { background: var(--amber); }
+
+.gate-panel-head { display: flex; padding: 11px 13px 0; }
+.gate-verdict {
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--green);
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+.gate.held .gate-verdict { color: var(--amber); border-color: rgba(215, 155, 74, 0.5); }
+
+.gate-sum { padding: 8px 13px 0; font-family: var(--serif); font-size: 13.5px; line-height: 1.45; color: var(--text); }
 
 /* Named, and clickable through to the node — "1 asset needs a look" is not something a
    director can act on. */
-.gatecard-blockers { list-style: none; margin: 9px 0 0; padding: 0; display: grid; gap: 4px; }
-.gatecard-blockers button {
-  display: block;
+.gate-blockers { display: grid; gap: 5px; padding: 10px 13px 0; }
+.blocker {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   width: 100%;
   text-align: left;
-  border: 1px solid var(--line);
+  border: 1px solid rgba(215, 155, 74, 0.4);
+  background: rgba(215, 155, 74, 0.08);
   border-radius: 8px;
-  background: rgba(0, 0, 0, 0.18);
-  padding: 6px 9px;
+  padding: 6px 10px;
+  cursor: pointer;
 }
-.gatecard-blockers button:hover { border-color: var(--gold-dim); }
-.gatecard-b-title { display: block; font-size: 12px; color: var(--cream); }
-.gatecard-b-reason {
-  display: block;
+.blocker:hover { border-color: var(--amber); background: rgba(215, 155, 74, 0.14); }
+.blocker b { font-weight: 400; font-size: 12.5px; color: var(--cream); }
+.blocker span {
+  margin-left: auto;
   font-family: var(--mono);
-  font-size: 10px;
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
   color: var(--amber);
-  margin-top: 2px;
 }
+.blocker em { font-style: normal; color: var(--faint); }
 
-.gatecard-note {
-  width: 100%;
-  margin-top: 10px;
+.gate-note {
+  display: block;
+  width: calc(100% - 26px);
+  margin: 10px 13px 0;
+  height: 33px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: rgba(0, 0, 0, 0.22);
   color: var(--text);
-  font-family: inherit;
-  font-size: 12px;
-  padding: 7px 9px;
+  font-family: var(--sans);
+  font-size: 13px;
+  padding: 0 11px;
 }
-.gatecard-note:focus { outline: none; border-color: var(--gold-dim); }
+.gate-note:focus { outline: none; border-color: var(--gold-dim); }
 
-.gatecard-actions { display: flex; gap: 8px; margin-top: 9px; }
-.gatecard-actions .btn-gold { flex: 1; }
+.gate-actions { display: flex; gap: 8px; padding: 9px 13px 0; }
+.gate-actions .btn-gold { flex: 1; }
+.gate-actions .btn-gold, .gate-actions .btn { height: 35px; }
 
-.gatecard-foot {
-  margin-top: 9px;
-  font-size: 11px;
-  line-height: 1.45;
+.gate-foot {
+  padding: 9px 13px 12px;
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: 0.03em;
+  line-height: 1.5;
   color: var(--faint);
 }
 
@@ -2139,34 +2753,37 @@ button:disabled { cursor: default; }
 /* Sits on the keyframe card itself. Asking for another angle is a first-class
    move in this model, so it gets a first-class affordance rather than a menu item. */
 .node-add-shot {
-  display: block;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   width: 100%;
-  margin-top: 9px;
-  padding: 6px 0;
-  border: 1px dashed var(--line);
-  border-radius: 7px;
-  background: transparent;
-  color: var(--muted);
+  margin-top: 11px;
+  padding: 8px 0;
+  border: 1px solid color-mix(in srgb, var(--gold) 30%, var(--line));
+  border-radius: 8px;
+  background: var(--gold-soft);
+  color: var(--gold);
   font-family: var(--mono);
   font-size: 10px;
-  letter-spacing: 0.1em;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
   cursor: pointer;
   transition: color 0.15s, border-color 0.15s, background 0.15s;
 }
 
 .node-add-shot:hover {
-  color: var(--gold);
-  border-color: var(--line-strong);
-  background: rgba(228, 165, 85, 0.06);
+  color: #f0c07a;
+  border-color: var(--gold);
+  background: rgba(228, 165, 85, 0.14);
 }
 
 .shot-dialog {
   position: fixed;
   z-index: 70;
-  width: 340px;
+  width: 296px;
   border: 1px solid var(--line);
-  border-radius: 11px;
+  border-radius: 10px;
   background: var(--surface);
   box-shadow: 0 22px 54px rgba(0, 0, 0, 0.62);
 }
@@ -2174,14 +2791,15 @@ button:disabled { cursor: default; }
 .shot-dialog-head {
   display: flex;
   align-items: baseline;
-  gap: 9px;
-  padding: 11px 13px 9px;
+  gap: 8px;
+  padding: 9px 11px 8px;
   border-bottom: 1px solid var(--line);
 }
+.shot-dialog-head .mono-label { font-size: 9px; letter-spacing: 0.14em; }
 
 .shot-dialog-head strong {
   flex: 1;
-  font-size: 13px;
+  font-size: 12.5px;
   font-weight: 500;
   color: var(--cream);
   white-space: nowrap;
@@ -2189,19 +2807,19 @@ button:disabled { cursor: default; }
   text-overflow: ellipsis;
 }
 
-.shot-dialog-body { padding: 4px 13px 12px; max-height: 46vh; overflow-y: auto; }
-.shot-row { margin-top: 12px; }
-.shot-row .mono-label { display: block; margin-bottom: 6px; }
-.shot-row .chip-row { gap: 5px; }
+.shot-dialog-body { padding: 2px 11px 10px; max-height: 46vh; overflow-y: auto; }
+.shot-row { margin-top: 9px; }
+.shot-row .mono-label { display: block; margin-bottom: 4px; font-size: 9px; letter-spacing: 0.14em; }
+.shot-row .chip-row { gap: 4px; }
 
 /* Nothing is preselected: a blank form is a valid request — "shoot it as written". */
 .opt-chip {
-  padding: 4px 8px;
+  padding: 3px 7px;
   border: 1px solid var(--line);
-  border-radius: 6px;
+  border-radius: 5px;
   background: transparent;
   color: var(--muted);
-  font-size: 11.5px;
+  font-size: 11px;
   cursor: pointer;
   transition: color 0.13s, border-color 0.13s, background 0.13s;
 }
@@ -2216,13 +2834,14 @@ button:disabled { cursor: default; }
 
 .shot-note {
   width: 100%;
-  padding: 7px 9px;
+  padding: 6px 8px;
   border: 1px solid var(--line);
-  border-radius: 7px;
+  border-radius: 6px;
   background: var(--surface-2);
   color: var(--text);
   font: inherit;
-  font-size: 12.5px;
+  font-size: 12px;
+  line-height: 1.4;
   resize: vertical;
 }
 
@@ -2231,12 +2850,12 @@ button:disabled { cursor: default; }
 .shot-dialog-foot {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 10px 13px;
+  gap: 9px;
+  padding: 8px 11px;
   border-top: 1px solid var(--line);
 }
 
-.shot-dialog-foot .mono-label { flex: 1; line-height: 1.4; }
+.shot-dialog-foot .mono-label { flex: 1; line-height: 1.35; font-size: 9px; letter-spacing: 0.06em; }
 
 .beat-text.dim { color: var(--faint); font-style: italic; }
 
@@ -2245,15 +2864,15 @@ button:disabled { cursor: default; }
 .suggest-btn {
   display: block;
   width: 100%;
-  margin-top: 12px;
-  padding: 8px 0;
+  margin-top: 9px;
+  padding: 6px 0;
   border: 1px solid var(--line-strong);
-  border-radius: 7px;
+  border-radius: 6px;
   background: rgba(228, 165, 85, 0.08);
   color: var(--gold);
   font-family: var(--mono);
-  font-size: 10.5px;
-  letter-spacing: 0.1em;
+  font-size: 10px;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
   cursor: pointer;
   transition: background 0.15s, color 0.15s;
@@ -2263,15 +2882,385 @@ button:disabled { cursor: default; }
 .suggest-btn:disabled { color: var(--faint); border-color: var(--line); cursor: default; }
 
 .suggest-why {
-  margin-top: 9px;
-  padding: 8px 10px;
+  margin-top: 8px;
+  padding: 7px 9px;
   border-left: 2px solid var(--gold);
   border-radius: 0 6px 6px 0;
   background: var(--surface-2);
-  font-size: 12.5px;
-  line-height: 1.45;
+  font-size: 11.5px;
+  line-height: 1.4;
   color: var(--text);
 }
 
 .suggest-why.bad { border-left-color: var(--red); color: var(--muted); }
-.suggest-why .mono-label { display: block; margin-top: 5px; }
+.suggest-why .mono-label { display: block; margin-top: 4px; font-size: 9px; letter-spacing: 0.06em; }
+
+/* ---------- login gate ---------- */
+
+.login-card { max-width: 460px; margin-left: auto; margin-right: auto; }
+.login-input {
+  width: 100%; border: none; outline: none; background: transparent;
+  color: var(--cream); font-family: var(--serif); font-size: 21px; line-height: 1.5;
+}
+.login-input::placeholder { color: var(--faint); }
+.login-card .btn-gold { height: 42px; padding: 0 20px; font-size: 15px; flex: none; }
+.login-error { margin-top: 12px; font-family: var(--mono); font-size: 12px; color: var(--red); }
+.login-sent { font-family: var(--serif); font-size: 17px; line-height: 1.55; color: var(--text); }
+
+/* ---------- empty-state library (reopen a film) ---------- */
+
+.library {
+  position: absolute; left: 0; right: 0; bottom: 0; z-index: 6;
+  padding: 16px 24px 20px;
+  background: linear-gradient(0deg, var(--bg-topbar) 34%, transparent);
+}
+.library-head {
+  font-family: var(--mono); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--faint); margin-bottom: 10px; text-align: center;
+}
+.library-grid {
+  display: flex; gap: 12px; overflow-x: auto; padding-bottom: 4px; justify-content: safe center;
+}
+.library-card {
+  flex: 0 0 auto; width: 168px; padding: 0; overflow: hidden; cursor: pointer; text-align: left;
+  border: 1px solid var(--line); border-radius: 12px; background: var(--surface);
+  transition: border-color 0.15s, transform 0.15s;
+}
+.library-card:hover:not(:disabled) { border-color: var(--line-strong); transform: translateY(-2px); }
+.library-card:disabled { opacity: 0.5; cursor: default; }
+.library-cover {
+  height: 92px; background: var(--surface-3) center / cover no-repeat;
+  display: flex; align-items: center; justify-content: center;
+}
+.library-cover-empty { font-family: var(--serif); font-style: italic; color: var(--faint); font-size: 15px; }
+.library-meta { padding: 9px 11px 11px; }
+.library-title {
+  font-family: var(--serif); font-size: 14px; color: var(--cream);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.library-sub { font-family: var(--mono); font-size: 10.5px; color: var(--faint); margin-top: 3px; }
+
+/* ---------- landing / homepage ---------- */
+
+.landing { height: 100%; overflow-y: auto; background: var(--bg); color: var(--text); }
+
+.lnav {
+  position: sticky; top: 0; z-index: 20;
+  display: flex; align-items: center; justify-content: space-between;
+  height: var(--topbar-h); padding: 0 24px;
+  background: rgba(34, 29, 23, 0.86);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--line);
+}
+.lnav-brand { display: flex; align-items: baseline; gap: 11px; }
+.lnav-right { display: flex; align-items: center; gap: 9px; }
+
+/* The homepage wears no studio chrome — a plain, transparent header that lets the work speak,
+   with light-touch links and the auth control floated to the right. */
+.lnav-plain { position: static; background: transparent; backdrop-filter: none; border-bottom: none; padding: 0 30px; }
+.lnav-link {
+  border: none; background: none; padding: 0; cursor: pointer;
+  font-family: var(--sans); font-size: 14px; color: var(--muted);
+  transition: color 0.15s;
+}
+.lnav-link:hover { color: var(--cream); }
+
+/* ---- the calm, single-focus forge (Manus-clean, in the dark palette) ---- */
+
+.lmain {
+  width: min(1120px, 100%); margin: 0 auto;
+  display: flex; flex-direction: column;
+  padding: 40px 24px 72px;
+}
+.lask {
+  margin: 0 0 34px;
+  font-family: var(--serif); font-weight: 400; font-size: 46px; line-height: 1.1;
+  text-align: center; color: var(--cream); letter-spacing: -0.01em;
+  animation: rise 0.5s cubic-bezier(0.2, 0.8, 0.25, 1);
+}
+.lask em { font-style: italic; color: var(--gold); }
+
+.composer-card {
+  width: 100%;
+  border: 1px solid var(--line); border-radius: 20px;
+  background: var(--surface);
+  box-shadow: 0 18px 50px -24px rgba(0, 0, 0, 0.7);
+  transition: border-color 0.18s, box-shadow 0.18s;
+  animation: rise 0.55s cubic-bezier(0.2, 0.8, 0.25, 1);
+}
+.composer-card:focus-within {
+  border-color: var(--line-strong);
+  box-shadow: 0 22px 60px -22px rgba(0, 0, 0, 0.8), 0 0 0 1px var(--line-strong);
+}
+.composer-input {
+  width: 100%; border: none; outline: none; resize: none; background: transparent;
+  color: var(--cream); font-family: var(--sans); font-size: 18px; line-height: 1.55;
+  padding: 22px 24px 6px; min-height: 96px; max-height: 260px;
+}
+.composer-input::placeholder { color: var(--faint); }
+
+.composer-opts {
+  display: flex; flex-wrap: wrap; gap: 8px 22px;
+  padding: 8px 22px 2px;
+  animation: unfold 0.22s ease;
+}
+
+.composer-bar { display: flex; align-items: center; gap: 10px; padding: 8px 12px 12px 14px; }
+.composer-plus {
+  width: 34px; height: 34px; flex: none; display: flex; align-items: center; justify-content: center;
+  border: 1px solid var(--line); border-radius: 50%; background: transparent;
+  color: var(--muted); font-size: 19px; line-height: 1;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+.composer-plus:hover { color: var(--cream); border-color: var(--line-strong); }
+.composer-plus.on { color: var(--gold); border-color: var(--line-strong); background: var(--gold-soft); }
+
+/* The left "mode" pill — mirrors a category chip: a soft gold-tinted button showing the
+   chosen style, opening the same settings panel as the plus. */
+.composer-mode {
+  display: inline-flex; align-items: center; gap: 7px; flex: none;
+  height: 34px; padding: 0 14px; border-radius: 999px;
+  border: 1px solid rgba(228, 165, 85, 0.32); background: var(--gold-soft);
+  color: var(--gold); font-family: var(--sans); font-size: 13.5px; text-transform: capitalize;
+  transition: border-color 0.15s, background 0.15s, color 0.15s;
+}
+.composer-mode:hover, .composer-mode.on { border-color: rgba(228, 165, 85, 0.55); color: var(--cream); }
+.composer-mode-ic { font-size: 13px; }
+
+.composer-bar-gap { flex: 1; }
+
+/* The right "quality" selector — length & format summary with a caret, like a model picker. */
+.composer-quality {
+  display: inline-flex; align-items: center; gap: 6px; flex: none;
+  height: 34px; padding: 0 12px; border-radius: 8px; background: transparent; border: none;
+  font-family: var(--sans); font-size: 13.5px; color: var(--muted);
+  transition: color 0.15s, background 0.15s;
+}
+.composer-quality:hover { color: var(--cream); background: rgba(255, 255, 255, 0.04); }
+.composer-caret { font-size: 13px; color: var(--faint); }
+
+.composer-go {
+  width: 36px; height: 36px; flex: none; display: flex; align-items: center; justify-content: center;
+  border: none; border-radius: 50%; background: var(--gold); color: #2a1f0f;
+  font-size: 18px; line-height: 1; transition: filter 0.15s, transform 0.1s;
+}
+.composer-go:hover:not(:disabled) { filter: brightness(1.08); }
+.composer-go:active:not(:disabled) { transform: translateY(1px); }
+.composer-go:disabled { background: #5d4c31; color: #8d7c60; }
+
+.composer-pills {
+  display: flex; flex-wrap: wrap; gap: 9px; justify-content: center;
+  width: 100%; margin-top: 18px;
+}
+.composer-pill {
+  display: inline-flex; align-items: center; gap: 7px;
+  border: 1px solid var(--line); border-radius: 999px; background: transparent;
+  padding: 8px 15px; max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-family: var(--serif); font-style: italic; font-size: 13.5px; color: var(--text);
+  transition: border-color 0.15s, background 0.15s, color 0.15s;
+}
+.composer-pill::before { content: "✎"; font-style: normal; font-size: 11px; color: var(--gold-dim); }
+.composer-pill:hover { border-color: var(--line-strong); background: var(--gold-soft); color: var(--cream); }
+
+/* ---- the template library, laid directly beneath the composer ---- */
+.ltemplates { margin-top: 56px; }
+.ltemplates-head {
+  margin-bottom: 20px;
+  font-family: var(--sans); font-size: 16px; color: var(--muted);
+}
+.tgrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 26px 24px; }
+
+.tcard {
+  display: flex; flex-direction: column; text-align: left; padding: 0; cursor: pointer;
+  border: none; background: transparent;
+}
+.tcard-cover {
+  position: relative; aspect-ratio: 16 / 10; border-radius: 12px; overflow: hidden;
+  background: var(--surface-3) center / cover no-repeat;
+  border: 1px solid var(--line);
+  display: flex; align-items: center; justify-content: center;
+  transition: border-color 0.16s, transform 0.16s, box-shadow 0.16s;
+}
+.tcard:hover:not(:disabled) .tcard-cover {
+  border-color: var(--line-strong); transform: translateY(-3px);
+  box-shadow: 0 16px 38px rgba(0, 0, 0, 0.42);
+}
+.tcard:disabled { cursor: default; }
+.tcard-cover-empty { font-family: var(--serif); font-style: italic; color: var(--faint); font-size: 20px; }
+.tcard-adopting {
+  position: absolute; inset: 0; z-index: 2;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(20, 16, 12, 0.72); backdrop-filter: blur(2px);
+  font-family: var(--mono); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--gold);
+}
+.tcard-meta { display: flex; align-items: center; gap: 9px; padding: 12px 2px 0; }
+.tcard-title {
+  font-family: var(--sans); font-size: 17px; color: var(--cream);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.tcard-badge {
+  flex: none; padding: 2px 8px; border-radius: 6px;
+  border: 1px solid var(--line-strong); background: var(--surface);
+  font-family: var(--mono); font-size: 9px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--gold);
+}
+.tcard-badge.pub { color: var(--green); border-color: rgba(134, 176, 107, 0.4); }
+.tcard-badge.priv { color: var(--muted); }
+
+@media (max-width: 860px) { .tgrid { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 560px) { .tgrid { grid-template-columns: 1fr; } }
+
+.lhero { position: relative; padding: 92px 24px 66px; display: flex; justify-content: center; }
+.lhero::after {
+  content: ""; position: absolute; inset: 0; pointer-events: none;
+  background: radial-gradient(80% 62% at 50% 0%, rgba(228, 165, 85, 0.08), transparent 62%);
+}
+.lhero-inner {
+  position: relative; z-index: 1;
+  width: min(760px, 100%); text-align: center;
+  animation: rise 0.6s cubic-bezier(0.2, 0.8, 0.25, 1);
+}
+.lhero-mark { font-family: var(--serif); font-size: 56px; line-height: 1.08; color: var(--cream); letter-spacing: -0.01em; }
+.lhero-mark em { font-style: italic; color: var(--gold); }
+.lhero-sub {
+  margin: 20px auto 0; max-width: 560px;
+  font-family: var(--serif); font-style: italic; font-size: 18px; line-height: 1.55; color: var(--muted);
+}
+.lhero-cta { display: flex; gap: 12px; justify-content: center; margin-top: 30px; }
+.lhero-go { height: 46px; padding: 0 24px; font-size: 15px; }
+.lhero-browse { height: 46px; display: inline-flex; align-items: center; padding: 0 20px; text-decoration: none; }
+.lhero-chips { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; margin-top: 30px; }
+.lhero-chip {
+  border: 1px solid var(--line); border-radius: 999px; padding: 7px 15px;
+  max-width: 340px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-family: var(--serif); font-style: italic; font-size: 13.5px; color: var(--muted);
+}
+
+/* The raised layer that carries the gallery beneath the hero. A soft top-lit gradient plus
+   an inset shadow reads as a distinct plane the finished work sits on. */
+.lband {
+  background: linear-gradient(180deg, #221d17 0%, var(--bg) 62%);
+  border-top: 1px solid var(--line);
+  box-shadow: inset 0 26px 44px -34px rgba(0, 0, 0, 0.7);
+  padding: 8px 0 24px;
+}
+
+.lsection { max-width: 1120px; margin: 0 auto; padding: 34px 24px; }
+.lsection-head { margin-bottom: 20px; }
+.lsection-head h2 { margin: 0; font-family: var(--serif); font-weight: 400; font-size: 26px; color: var(--cream); }
+.lsection-head p { margin: 6px 0 0; color: var(--muted); font-size: 14px; }
+
+.ggrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 16px; }
+.gcard {
+  display: flex; flex-direction: column; text-align: left; padding: 0; overflow: hidden; cursor: pointer;
+  border: 1px solid var(--line); border-radius: 14px; background: var(--surface);
+  transition: border-color 0.16s, transform 0.16s, box-shadow 0.16s;
+}
+.gcard:hover:not(:disabled) { border-color: var(--line-strong); transform: translateY(-3px); box-shadow: 0 14px 34px rgba(0, 0, 0, 0.38); }
+.gcard:disabled { cursor: default; }
+.gcard-adopting {
+  position: absolute; inset: 0; z-index: 2;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(20, 16, 12, 0.72); backdrop-filter: blur(2px);
+  font-family: var(--mono); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--gold);
+}
+.gcard-cover {
+  position: relative; aspect-ratio: 16 / 9;
+  background: var(--surface-3) center / cover no-repeat;
+  display: flex; align-items: center; justify-content: center;
+}
+.gcard-cover-empty { font-family: var(--serif); font-style: italic; color: var(--faint); font-size: 18px; }
+.gcard-badge {
+  position: absolute; top: 9px; right: 9px; padding: 3px 8px; border-radius: 6px;
+  background: rgba(20, 16, 12, 0.8); backdrop-filter: blur(3px);
+  border: 1px solid var(--line-strong);
+  font-family: var(--mono); font-size: 9px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--gold);
+}
+.gcard-badge.pub { color: var(--green); border-color: rgba(134, 176, 107, 0.4); }
+.gcard-badge.priv { color: var(--muted); }
+.gcard-meta { padding: 12px 14px 14px; }
+.gcard-title { font-family: var(--serif); font-size: 17px; color: var(--cream); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gcard-idea {
+  margin-top: 5px; font-size: 12.5px; line-height: 1.5; color: var(--muted);
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.lempty {
+  border: 1px dashed var(--line); border-radius: 16px;
+  background: rgba(255, 255, 255, 0.015);
+  padding: 42px 24px; text-align: center;
+}
+.lempty-mark { font-size: 24px; color: var(--gold-dim); }
+.lempty p { margin: 12px 0 5px; font-family: var(--serif); font-style: italic; font-size: 18px; color: var(--text); }
+.lempty span { color: var(--faint); font-size: 13px; }
+
+.lfoot {
+  display: flex; align-items: center; gap: 12px; justify-content: center;
+  padding: 40px 24px 56px; margin-top: 30px; border-top: 1px solid var(--line);
+}
+.lfoot-note { font-family: var(--mono); font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--faint); }
+
+/* ---------- auth page ---------- */
+
+.authpage { display: flex; flex-direction: column; }
+.authbox {
+  flex: 1; display: flex; align-items: center; justify-content: center;
+  padding: 40px; min-height: calc(100% - var(--topbar-h));
+}
+
+/* ---------- share / showcase ---------- */
+
+.showcase { height: 100%; overflow-y: auto; background: var(--bg); color: var(--text); }
+.show-empty {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 14px; min-height: 60vh; padding: 40px; text-align: center; color: var(--muted);
+}
+.show-hero { max-width: 900px; margin: 0 auto; padding: 60px 24px 24px; text-align: center; }
+.show-kicker { font-family: var(--mono); font-size: 10px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--gold); }
+.show-title { margin: 12px 0 0; font-family: var(--serif); font-weight: 400; font-size: 44px; line-height: 1.1; color: var(--cream); }
+.show-idea { margin: 16px auto 0; max-width: 620px; font-family: var(--serif); font-style: italic; font-size: 18px; line-height: 1.5; color: var(--muted); }
+.show-tags { display: flex; gap: 6px; justify-content: center; flex-wrap: wrap; margin-top: 18px; }
+.show-cut { max-width: 900px; margin: 24px auto 0; padding: 0 24px; }
+.show-cut video { width: 100%; border-radius: 14px; border: 1px solid var(--line); background: #000; box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5); }
+.show-stills { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 14px; }
+.show-still { margin: 0; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--surface); }
+.show-still img { width: 100%; aspect-ratio: 16 / 9; object-fit: cover; display: block; }
+.show-still figcaption {
+  padding: 8px 11px; font-family: var(--mono); font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.show-foot-cta { max-width: 700px; margin: 40px auto; padding: 40px 24px 60px; text-align: center; border-top: 1px solid var(--line); }
+.show-foot-cta p { color: var(--muted); margin: 10px 0 22px; font-size: 15px; }
+.show-foot-cta .lhero-mark { font-size: 34px; }
+
+/* ---------- studio: visibility toggle ---------- */
+
+.vis-toggle.public { color: var(--green); border-color: rgba(134, 176, 107, 0.4); }
+.vis-toggle.public:hover:not(:disabled) { border-color: rgba(134, 176, 107, 0.7); }
+
+/* ---------- mobile gate ---------- */
+/* Hidden on desktop; below the breakpoint it becomes an opaque fixed overlay that covers the
+   whole app, so no half-laid-out studio ever shows through on a small screen. */
+.mobile-gate { display: none; }
+
+@media (max-width: 900px) {
+  .mobile-gate {
+    display: flex;
+    position: fixed; inset: 0; z-index: 9999;
+    align-items: center; justify-content: center;
+    padding: 30px;
+    background: radial-gradient(130% 80% at 50% 0%, #2a2319 0%, var(--bg) 68%);
+    text-align: center;
+  }
+  .mobile-gate-inner { max-width: 430px; animation: rise 0.5s cubic-bezier(0.2, 0.8, 0.25, 1); }
+  .mobile-gate .hero-mark { font-size: 44px; }
+  .mg-badge {
+    display: inline-block; margin: 18px 0 16px; padding: 4px 12px; border-radius: 999px;
+    border: 1px solid var(--line-strong); background: var(--gold-soft); color: var(--gold);
+    font-family: var(--mono); font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase;
+  }
+  .mobile-gate h1 {
+    margin: 0 0 14px; font-family: var(--serif); font-weight: 400; font-size: 27px;
+    line-height: 1.2; color: var(--cream);
+  }
+  .mobile-gate p { margin: 0 auto 12px; max-width: 380px; color: var(--muted); font-size: 14.5px; line-height: 1.6; }
+  .mg-hint { color: var(--faint) !important; font-family: var(--mono); font-size: 11px; letter-spacing: 0.02em; }
+}

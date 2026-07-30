@@ -14,8 +14,13 @@ import os
 from functools import lru_cache
 
 try:
+    from pathlib import Path as _Path
+
     from dotenv import load_dotenv
-    load_dotenv()
+    # Load backend/.env by its own path, not the CWD. `uvicorn backend.app:app` and
+    # `python -m backend.scripts.smoke_real` both run from the repo root, where a bare
+    # load_dotenv() would look for ./.env and silently miss the file that lives here.
+    load_dotenv(_Path(__file__).with_name(".env"))
 except Exception:  # dotenv optional
     pass
 
@@ -43,10 +48,28 @@ class Config:
     OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
     # Model defaults (overridable). See genblaze provider matrix.
+    # Model slugs are the GMICloud request-queue catalog (console.gmicloud.ai/.../requestqueue),
+    # which is a different namespace from the chat catalog and moves on its own — the older
+    # kling i2v slugs 404 there now. Image and video are kept in the ByteDance seed* family so
+    # a still and the shot animated from it share a look. Verify a slug with GET /models on the
+    # queue before changing it; a dead slug fails the whole render pass, not just one frame.
     IMAGE_MODEL = os.getenv("IMAGE_MODEL", "seedream-5.0-lite")
-    I2V_MODEL = os.getenv("I2V_MODEL", "kling-image2video-v2.1-master")
+    I2V_MODEL = os.getenv("I2V_MODEL", "seedance-1-0-pro-250528")
     TTS_MODEL = os.getenv("TTS_MODEL", "eleven_v3")
     CHAT_MODEL = os.getenv("CHAT_MODEL", "gpt-4o")
+    # GMICloud namespaces its model ids ("anthropic/claude-sonnet-4.5"); the bare OpenAI
+    # slugs the OpenAI stack uses 404 there, so the GMI planner model is its own setting.
+    GMI_CHAT_MODEL = os.getenv("GMI_CHAT_MODEL", "anthropic/claude-sonnet-4.5")
+
+    # Provider fallback — when the primary model errors mid-run, Genblaze retries the step on
+    # the next model in this list (same provider). Same-family defaults keep the param
+    # contract stable (a fallback that itself rejects `duration`/`aspect_ratio` is no fallback
+    # at all). All defaults are verified-present in the genblaze model matrix.
+    _FALLBACKS = {
+        "gmicloud": {"image": ["gemini-2.5-flash-image"],
+                     "video": ["seedance-1-5-pro-251215"]},
+        "openai": {"image": ["gpt-image-1-mini"], "video": []},
+    }
 
     # QC — the review agent. It looks at pixels, so it needs a vision-capable model of its
     # own: the planner's model may be text-only (llama-3.3-70b on GMI is), and a judge that
@@ -57,6 +80,14 @@ class Config:
     # video gate gets a tighter budget than the still gate.
     QC_MAX_VIDEO_REGENS = int(os.getenv("QC_MAX_VIDEO_REGENS", "1"))
     QC_FRAME_SAMPLES = int(os.getenv("QC_FRAME_SAMPLES", "3"))  # frames sampled per clip
+
+    # How many independent renders a generation pass runs at once. The sheets and keyframe
+    # passes fan their units out across a small thread pool — each unit is a blocking provider
+    # call that spends most of its time waiting on the network, so a handful in flight cuts a
+    # pass's wall time without touching cost. Kept small by default so a burst never trips the
+    # provider's own concurrency/rate cap; raise it once you know your plan's limit. Video
+    # stays serial (the expensive, rate-sensitive pass), so this does not apply there.
+    GEN_CONCURRENCY = int(os.getenv("GEN_CONCURRENCY", "3"))
 
     # Where projects + exports land when B2 isn't configured (and the local cache when it is).
     DATA_DIR = os.getenv("DATA_DIR", ".data")
@@ -87,6 +118,24 @@ class Config:
     def mock_media(cls) -> bool:
         """Images/video/audio: explicit MOCK_MEDIA wins, else follow MOCK_MODE."""
         return _bool(os.getenv("MOCK_MEDIA"), default=cls.MOCK_MODE)
+
+    @classmethod
+    def _fallbacks(cls, kind: str) -> list[str]:
+        """Fallback model list for `kind` ("image" | "video"). Env overrides the default:
+        a comma-separated `IMAGE_FALLBACK_MODELS` / `I2V_FALLBACK_MODELS` (empty string
+        disables fallback), else the stack's verified defaults."""
+        env = os.getenv("IMAGE_FALLBACK_MODELS" if kind == "image" else "I2V_FALLBACK_MODELS")
+        if env is not None:
+            return [m.strip() for m in env.split(",") if m.strip()]
+        return list(cls._FALLBACKS.get(cls.PROVIDER_STACK, {}).get(kind, []))
+
+    @classmethod
+    def image_fallbacks(cls) -> list[str]:
+        return cls._fallbacks("image")
+
+    @classmethod
+    def video_fallbacks(cls) -> list[str]:
+        return cls._fallbacks("video")
 
     @classmethod
     def has_b2(cls) -> bool:

@@ -1,0 +1,16 @@
+# Keep the build context small and let the image rebuild these itself.
+.git
+.venv
+node_modules
+frontend/node_modules
+frontend/index.html
+.data
+docs
+*.pdf
+__pycache__
+*.py[cod]
+.DS_Store
+.env
+.env.*
+!.env.example
+PLAN.md

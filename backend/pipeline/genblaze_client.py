@@ -127,6 +127,52 @@ class GenResult:
     duration_sec: float | None = None
 
 
+def _chain(pipeline, parent_run_id: str | None):
+    """Link this render to the run it descends from, so the manifest carries the lineage.
+
+    Genblaze's public hook is `from_result(prev_result)`, but that needs a live
+    `PipelineResult` in hand — and cineforge only keeps the *summarized* provenance (a run_id
+    string that survives the SSE boundary, disk, and B2). `from_result` does nothing but set
+    `_parent_run_id = result.run.run_id`, and `run()` reads that attr directly (pipeline.py
+    consumes `self._parent_run_id`), so seeding it from the persisted id is the same edge with
+    one fewer object to hold.
+    """
+    if parent_run_id:
+        pipeline._parent_run_id = parent_run_id
+    return pipeline
+
+
+def _first_asset(result, what: str):
+    """The step's output asset, or a clear error explaining why there isn't one.
+
+    A failed step (quota, moderation, a bad model id, a provider outage) comes back with an
+    empty `assets` list, not an exception — so a bare `.assets[0]` turns every real failure
+    into a cryptic IndexError. Surface the provider's own message instead; the QC gate and the
+    SSE stream both depend on knowing *why* a render didn't happen.
+    """
+    step = result.run.steps[-1]
+    if not step.assets:
+        reason = (getattr(step, "error", None) or getattr(result, "error_summary", None)
+                  or "no asset returned")
+        raise RuntimeError(f"{what} failed: {reason}")
+    return step.assets[0]
+
+
+def _image_asset(url: str):
+    """Wrap a still URL as a Genblaze input Asset for image conditioning.
+
+    Genblaze routes conditioning frames off ``Step.inputs`` (``route_images``), keyed by
+    MIME prefix — not off a prompt/param string. So a reference sheet or master frame has to
+    enter the step as an ``external_inputs`` Asset whose ``media_type`` starts with ``image/``,
+    or the provider generates unconditioned and the whole consistency claim silently breaks.
+    The extension is only a hint for the MIME type; the URL is what the provider fetches.
+    """
+    from genblaze_core import Asset
+    ext = url.rsplit(".", 1)[-1].lower().split("?")[0]
+    mime = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "webp": "image/webp"}.get(ext, "image/png")
+    return Asset(url=url, media_type=mime)
+
+
 def _storage():
     """Build the B2 sink (real mode only)."""
     from genblaze_core import ObjectStorageSink, KeyStrategy
@@ -135,6 +181,20 @@ def _storage():
         S3StorageBackend.for_backblaze(cfg.B2_BUCKET),
         key_strategy=KeyStrategy.HIERARCHICAL,
     )
+
+
+def _seed_int(seed: str) -> int:
+    """Fold the director's per-attempt seed string into a stable int the image model accepts.
+
+    The retry/regen loop varies this string per attempt (`{n}-{i}-{attempt}`) to force a fresh
+    frame, but that only reaches the model as `Step.seed` (`int | None`) — genblaze lifts it
+    out of the step params and `BaseProvider.prepare_payload` re-injects it into the request,
+    and the GMICloud image surface allows `seed`. Hashing keeps the mapping deterministic (the
+    same string reproduces the same frame — the point of a seed) while distinct strings stay
+    distinct. Bounded to signed-32-bit so a provider that caps the seed range can't reject it.
+    """
+    import hashlib
+    return int.from_bytes(hashlib.sha256(seed.encode()).digest()[:4], "big") % 2_147_483_647
 
 
 def _image_provider():
@@ -156,8 +216,15 @@ def _video_provider():
 # ---------------- Public API used by the AI layer ----------------
 
 def generate_image(prompt: str, *, seed: str = "x", ref_urls: list[str] | None = None,
-                   aspect_ratio: str = "16:9") -> GenResult:
-    """Generate a still (character sheet, environment plate, or scene keyframe)."""
+                   aspect_ratio: str = "16:9", parent_run_id: str | None = None) -> GenResult:
+    """Generate a still (character sheet, environment plate, or scene keyframe).
+
+    `seed` is the retry/regen loop's per-attempt handle: it picks the mock placeholder in mock
+    mode and is forwarded to the real image model as `Step.seed` (see `_seed_int`), so a
+    re-render genuinely differs instead of leaning on provider randomness. `parent_run_id`
+    links this render to the take it was regenerated from, so the manifest carries the lineage
+    (see `_chain`).
+    """
     if cfg.mock_media():
         time.sleep(0.2)
         model = cfg.IMAGE_MODEL if cfg.PROVIDER_STACK == "gmicloud" else "gpt-image-1"
@@ -166,18 +233,24 @@ def generate_image(prompt: str, *, seed: str = "x", ref_urls: list[str] | None =
         return GenResult(
             url=url,
             thumbnail=url,
-            provenance=mock_provenance(cfg.PROVIDER_STACK, model, prompt),
+            provenance=mock_provenance(cfg.PROVIDER_STACK, model, prompt, parent_run_id),
         )
 
     from genblaze_core import Pipeline, Modality
     provider, model = _image_provider()
+    # The per-attempt seed the retry/regen loop varies has to reach the model to make a
+    # re-render actually differ; forwarded as Step.seed (see _seed_int), not left in mock mode.
     step_kwargs = dict(model=model, prompt=prompt, modality=Modality.IMAGE,
-                       aspect_ratio=aspect_ratio)
-    # ref_urls -> image conditioning where the provider supports it (input routing).
+                       aspect_ratio=aspect_ratio, seed=_seed_int(seed))
+    if cfg.image_fallbacks():
+        step_kwargs["fallback_models"] = cfg.image_fallbacks()
+    # ref sheets condition the still. Genblaze reads conditioning images off the step's
+    # inputs, not a prompt param, so they enter as external_inputs (see _image_asset).
     if ref_urls:
-        step_kwargs["image"] = ref_urls[0]
-    result = Pipeline("keyframe").step(provider, **step_kwargs).run(sink=_storage(), timeout=300)
-    asset = result.run.steps[-1].assets[0]
+        step_kwargs["external_inputs"] = [_image_asset(u) for u in ref_urls]
+    pipe = _chain(Pipeline("keyframe").step(provider, **step_kwargs), parent_run_id)
+    result = pipe.run(sink=_storage(), timeout=300)
+    asset = _first_asset(result, f"image ({model})")
     prov = summarize_manifest(result.manifest, prompt)
     prov.provider, prov.model, prov.sha256 = cfg.PROVIDER_STACK, model, getattr(asset, "sha256", None)
     return GenResult(url=asset.url, thumbnail=asset.url, provenance=prov)
@@ -185,13 +258,14 @@ def generate_image(prompt: str, *, seed: str = "x", ref_urls: list[str] | None =
 
 def image_to_video(image_url: str, prompt: str, *, duration: int = 8,
                    aspect_ratio: str = "16:9", framing: str | None = None,
-                   move: str | None = None) -> GenResult:
+                   move: str | None = None, parent_run_id: str | None = None) -> GenResult:
     """Animate an approved master frame into one shot — the consistency-preserving step.
 
     Every setup of a scene is animated from the same approved still, so the frame a human
     said yes to is the frame all of its coverage inherits. `framing`/`move` describe the
     setup being shot; the real providers read them out of the prompt, and the mock uses them
-    to crop, so both paths actually differ per setup.
+    to crop, so both paths actually differ per setup. `parent_run_id` links a re-shoot to the
+    take it descends from (see `_chain`).
     """
     if cfg.mock_media():
         time.sleep(0.3)
@@ -200,16 +274,22 @@ def image_to_video(image_url: str, prompt: str, *, duration: int = 8,
         return GenResult(
             url=url or image_url,  # no ffmpeg: fall back to the still so the UI still shows something
             thumbnail=image_url, duration_sec=float(duration),
-            provenance=mock_provenance(cfg.PROVIDER_STACK, model, prompt),
+            provenance=mock_provenance(cfg.PROVIDER_STACK, model, prompt, parent_run_id),
         )
 
     from genblaze_core import Pipeline, Modality
     provider, model = _video_provider()
+    # The approved master frame is the conditioning input, not a prompt param — Genblaze's
+    # image->video providers read it off the step's inputs (see _image_asset). This is the
+    # frame the human said yes to, and every setup's coverage inherits it.
     step_kwargs = dict(model=model, prompt=prompt, modality=Modality.VIDEO,
-                       image=image_url, duration=duration, aspect_ratio=aspect_ratio)
-    result = Pipeline("image-to-video").step(provider, **step_kwargs).run(
-        sink=_storage(), timeout=600)
-    asset = result.run.steps[-1].assets[0]
+                       duration=duration, aspect_ratio=aspect_ratio,
+                       external_inputs=[_image_asset(image_url)])
+    if cfg.video_fallbacks():
+        step_kwargs["fallback_models"] = cfg.video_fallbacks()
+    pipe = _chain(Pipeline("image-to-video").step(provider, **step_kwargs), parent_run_id)
+    result = pipe.run(sink=_storage(), timeout=600)
+    asset = _first_asset(result, f"video ({model})")
     prov = summarize_manifest(result.manifest, prompt)
     prov.provider, prov.model, prov.sha256 = cfg.PROVIDER_STACK, model, getattr(asset, "sha256", None)
     return GenResult(url=asset.url, thumbnail=image_url,
@@ -239,7 +319,10 @@ def _post_json(url: str, payload: dict, api_key: str, timeout: int = 90) -> dict
     req = urllib.request.Request(
         url,
         data=json.dumps(payload).encode(),
-        headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}",
+                 # GMICloud sits behind Cloudflare, which 403s the default urllib agent
+                 # ("error code: 1010"); a named agent clears it (same as _fetch_still).
+                 "User-Agent": "cineforge/1.0"},
         method="POST",
     )
     with urllib.request.urlopen(req, timeout=timeout) as r:
@@ -266,18 +349,28 @@ def chat(system: str, user: str, *, json_mode: bool = False, temperature: float 
         return ""  # callers supply their own mock structure
 
     prefer_openai = cfg.PROVIDER_STACK == "openai" or bool(cfg.OPENAI_API_KEY)
+    # json_mode maps to the OpenAI-compatible response_format both providers speak. A full
+    # film synthesis is a long, large JSON, so the planner lifts the adapter's defaults (60s,
+    # a low token cap) that would otherwise truncate the bible mid-object.
+    rformat = {"type": "json_object"} if json_mode else None
 
     # 1) Genblaze adapters, if the packages are actually installed. Skipped for vision
     #    calls — their chat() helpers take plain strings, not multimodal content parts.
+    #    These are thin wrappers over the provider's OpenAI-compatible endpoint and return a
+    #    ChatResponse; the reasoning agents want the raw text off `.text`.
     try:
         if image_urls:
             raise ImportError
         if prefer_openai and cfg.OPENAI_API_KEY:
             from genblaze_openai import chat as oai_chat
-            return oai_chat(model=model or cfg.CHAT_MODEL, system=system, user=user)
+            return oai_chat(model=model or cfg.CHAT_MODEL, system=system, prompt=user,
+                            temperature=temperature, response_format=rformat,
+                            max_tokens=16000, timeout=300).text
         if cfg.GMI_API_KEY:
             from genblaze_gmicloud import chat as gmi_chat
-            return gmi_chat(model=model or "llama-3.3-70b", system=system, user=user)
+            return gmi_chat(model=model or cfg.GMI_CHAT_MODEL, system=system, prompt=user,
+                            temperature=temperature, response_format=rformat,
+                            max_tokens=16000, timeout=300).text
     except ImportError:
         pass  # not installed yet — fall through to the direct wire call
 
@@ -290,7 +383,7 @@ def chat(system: str, user: str, *, json_mode: bool = False, temperature: float 
     elif cfg.GMI_API_KEY and not image_urls:
         base = os.getenv("GMI_BASE_URL", "https://api.gmi-serving.com/v1")
         key = cfg.GMI_API_KEY
-        model = model or os.getenv("GMI_CHAT_MODEL", "llama-3.3-70b")
+        model = model or cfg.GMI_CHAT_MODEL
     else:
         return ""
 
@@ -311,3 +404,65 @@ def chat(system: str, user: str, *, json_mode: bool = False, temperature: float 
     data = _post_json(f"{base}/chat/completions", payload, key,
                       timeout=240 if image_urls else 90)
     return (data.get("choices") or [{}])[0].get("message", {}).get("content", "") or ""
+
+
+def chat_stream(system: str, user: str, *, json_mode: bool = False,
+                temperature: float = 0.8, model: str | None = None, timeout: int = 300):
+    """Streaming sibling of chat() for the planner's one long synthesis call.
+
+    Yields text deltas as the model writes them; the concatenation of everything yielded is
+    the same string chat() would return in one blocking piece. It talks the OpenAI-compatible
+    SSE wire directly — both OpenAI and GMICloud speak it — because the genblaze adapters'
+    chat() helpers hand back a settled string with no per-token hook, and the whole point here
+    is to see the tokens arrive.
+
+    Text-only by design (the planner never sends images), so it skips the vision plumbing in
+    chat(). Yields nothing when there is no key, exactly as chat() returns "" — the caller
+    falls back to its own path either way.
+    """
+    if cfg.mock_text():
+        return
+
+    import os
+    prefer_openai = cfg.PROVIDER_STACK == "openai" or bool(cfg.OPENAI_API_KEY)
+    if prefer_openai and cfg.OPENAI_API_KEY:
+        base = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+        key, model = cfg.OPENAI_API_KEY, model or cfg.CHAT_MODEL
+    elif cfg.GMI_API_KEY:
+        base = os.getenv("GMI_BASE_URL", "https://api.gmi-serving.com/v1")
+        key, model = cfg.GMI_API_KEY, model or cfg.GMI_CHAT_MODEL
+    else:
+        return
+
+    payload = {
+        "model": model,
+        "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+        "temperature": temperature,
+        "stream": True,
+    }
+    if json_mode:
+        payload["response_format"] = {"type": "json_object"}
+
+    req = urllib.request.Request(
+        f"{base}/chat/completions",
+        data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}",
+                 "User-Agent": "cineforge/1.0"},  # named agent clears Cloudflare (see _post_json)
+        method="POST",
+    )
+    # The response is line-iterable and SSE frames are line-delimited, so reading line by line
+    # is enough — no need to buffer for the blank-line frame separator the wire also sends.
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        for raw in r:
+            line = raw.decode("utf-8", "ignore").strip()
+            if not line.startswith("data:"):
+                continue
+            data = line[5:].strip()
+            if data == "[DONE]":
+                break
+            try:
+                delta = json.loads(data)["choices"][0]["delta"].get("content")
+            except (json.JSONDecodeError, LookupError):
+                continue  # keep-alive comment or a frame without a content delta
+            if delta:
+                yield delta

@@ -2,8 +2,40 @@ import { useState } from 'react';
 import { relTime } from './diff.js';
 import {
   CRITICAL, CRITERION, SOURCE, verdictColor, verdictLabel, failedChecks, isSighted,
-  needsReview,
+  needsReview, recommendAction,
 } from './qc.js';
+
+// How the recommended action reads on the ledger's terms — what it costs to take it.
+const COST_LABEL = {
+  free: 'costs nothing', text: 'no render', render: 'spends a render', none: '',
+};
+
+// The cheapest resolving action, led with, so the menu never defaults to a paid re-render.
+// Every action stays available in the row below — this only recommends; the director decides.
+function Recommendation({ rec, node, busy, onReview, onRegenerate, onAccept, onCompareVersion }) {
+  if (!rec) return null;
+  const run = () => {
+    if (rec.key === 'review') onReview(node);
+    else if (rec.key === 'regenerate') onRegenerate(node, rec.note);
+    else if (rec.key === 'select') onCompareVersion(rec.version);
+    else if (rec.key === 'accept') onAccept(node);
+  };
+  return (
+    <div className={`qc-rec ${rec.key}`}>
+      <div className="qc-rec-head">
+        <span className="qc-rec-tag">Recommended</span>
+        {COST_LABEL[rec.cost] && <span className="qc-rec-cost">{COST_LABEL[rec.cost]}</span>}
+      </div>
+      <div className="qc-rec-why">{rec.why}</div>
+      {rec.key !== 'flag' && (
+        <button className={rec.key === 'regenerate' ? 'btn-gold' : 'btn'}
+                disabled={busy} onClick={run}>
+          {rec.label}
+        </button>
+      )}
+    </div>
+  );
+}
 
 // One asset's review, in full.
 //
@@ -69,7 +101,7 @@ function Evidence({ report, onSelectNode }) {
 }
 
 export default function QCPanel({ node, report, onSelectNode, onRegenerate, onAccept,
-                                  onReview, busy }) {
+                                  onReview, onCompareVersion, busy }) {
   const [open, setOpen] = useState(true);
 
   // An asset with no report has simply not been through the gate yet. Offering the review
@@ -98,6 +130,19 @@ export default function QCPanel({ node, report, onSelectNode, onRegenerate, onAc
   const color = verdictColor(report.verdict);
   const override = node?.data?.qc_override;
   const outstanding = needsReview(report.verdict) && !override;
+  // The override is the human's call — once made, the tool stops recommending its way out.
+  const rec = override ? null : recommendAction(node, report);
+
+  // The alternatives shown under the recommendation — the full menu minus whatever is already
+  // the recommended button, so nothing appears twice.
+  const otherActions = [
+    { key: 'review', cls: 'btn', label: '⟳ Re-review',
+      title: 'Look again — changes nothing else', run: () => onReview(node) },
+    outstanding && { key: 'regenerate', cls: 'btn-gold', label: '↻ Re-render',
+      title: 'Make this asset again', run: () => onRegenerate(node) },
+    outstanding && { key: 'accept', cls: 'btn', label: 'Keep as is',
+      title: 'Keep this version despite the verdict', run: () => onAccept(node) },
+  ].filter(Boolean).filter((a) => a.key !== rec?.key);
 
   return (
     <div className="insp-section qc-panel">
@@ -149,27 +194,28 @@ export default function QCPanel({ node, report, onSelectNode, onRegenerate, onAc
             {report.judged_at ? ` · ${relTime(report.judged_at)}` : ''}
           </div>
 
-          {/* Three different decisions, and the difference between them is what they cost.
-              Re-review re-reads pixels that exist (a text call). Re-render pays for the
-              asset again. Accepting pays nothing and keeps what you already have. */}
-          <div className="qc-actions">
-            <button className="btn" disabled={busy} onClick={() => onReview(node)}
-                    title="Look again — renders nothing">
-              ⟳ Re-review
-            </button>
-            {outstanding && (
-              <>
-                <button className="btn-gold" disabled={busy} onClick={() => onRegenerate(node)}
-                        title="Render this asset again">
-                  ↻ Re-render
-                </button>
-                <button className="btn" disabled={busy} onClick={() => onAccept(node)}
-                        title="Keep this take despite the verdict">
-                  Keep
-                </button>
-              </>
-            )}
-          </div>
+          <Recommendation
+            rec={rec} node={node} busy={busy}
+            onReview={onReview} onRegenerate={onRegenerate}
+            onAccept={onAccept} onCompareVersion={onCompareVersion}
+          />
+
+          {/* Every action the gate can take, minus the one already recommended above — so the
+              same button never shows up twice. The recommendation leads with the cheapest;
+              these are the alternatives, always available for the director to overrule with. */}
+          {otherActions.length > 0 && (
+            <>
+              {rec && <div className="qc-actions-label">Other options</div>}
+              <div className="qc-actions">
+                {otherActions.map((a) => (
+                  <button key={a.key} className={a.cls} disabled={busy}
+                          onClick={a.run} title={a.title}>
+                    {a.label}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
         </>
       )}
     </div>

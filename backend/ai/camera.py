@@ -38,12 +38,57 @@ def _who(dna_blocks: list[str]) -> str:
     return " ".join(f"[{d}]" for d in dna_blocks) if dna_blocks else ""
 
 
+# ---- the identity layer ----------------------------------------------------
+#
+# A character is stored in layers, not one blob: an *identity* (permanent physical traits) and
+# a *wardrobe* (the founding costume, which a later scene may change) and a one-phrase bearing.
+# `dna` — the compact string every downstream prompt, the QC gate and the whole UI read — is
+# then composed from those layers rather than stored beside them, so it can never drift from
+# the identity a director actually edits.
+
+# The identity fields, in the order they read as a description ("Nigerian man, early 40s, dark
+# brown skin…"). This is the one source of truth for that order; the story normaliser keys off
+# the same tuple so the two cannot disagree on what a character's identity is.
+IDENTITY_FIELDS = ("ethnicity", "gender", "age", "build", "skin", "hair", "eyes", "features")
+
+
+def identity_block(identity: dict | None) -> str:
+    """Render the structured identity layer to the compact clause a prompt wants.
+
+    Ethnicity and gender lead as one noun phrase ("Nigerian man"); the remaining traits follow
+    as comma-separated clauses. Blank fields are dropped, so a sparsely-filled identity still
+    reads cleanly.
+    """
+    d = identity if isinstance(identity, dict) else {}
+    lead = " ".join(x for x in (d.get("ethnicity"), d.get("gender")) if (x or "").strip()).strip()
+    rest = [str(d.get(k)).strip() for k in IDENTITY_FIELDS[2:] if (d.get(k) or "").strip()]
+    return ", ".join(([lead] if lead else []) + rest)
+
+
+def character_dna(identity: dict | None = None, wardrobe: str = "", bearing: str = "") -> str:
+    """The compact visual label for a character, composed from its layers."""
+    parts = [identity_block(identity), (wardrobe or "").strip(), (bearing or "").strip()]
+    return ", ".join(p for p in parts if p)
+
+
 # ---- the three prompt sets -------------------------------------------------
 
+# The one thing every founding character sheet holds in common, whatever the film: a fixed
+# studio setup. Pinning it here — rather than leaving each sheet's backdrop to the idea — is
+# what makes the cast read as one set of references instead of one-off portraits, and the plain
+# seamless backdrop is what lets a sheet be matted to a cutout later if a shot ever needs it.
+SHEET_CONTRACT = (
+    "Full-body character turnaround: front, three-quarter and profile views of the SAME "
+    "person, identical in every view, plus a head-and-shoulders close-up. Seamless plain "
+    "light-grey studio backdrop, even shadowless softbox lighting, no props, no set, no floor "
+    "line or cast shadow. Orthographic identity view for reference use."
+)
+
+
 def sheet_prompt(style: str, dna: str) -> str:
-    """Set 1a — a character's founding reference sheet."""
-    return (f"{style}. Character reference sheet: {dna}. "
-            f"orthographic identity view, neutral background")
+    """Set 1a — a character's founding reference sheet: the film's look, this character's
+    identity, and the fixed studio contract every sheet shares."""
+    return f"{style}. Character reference sheet: {dna}. {SHEET_CONTRACT}"
 
 
 def plate_prompt(style: str, desc: str) -> str:
@@ -130,12 +175,19 @@ def ensure_prompts(plan: dict, style: str) -> dict:
     carries a complete prompt — so the three generation stages can be pure execution and a
     partial synthesis degrades into a composed prompt instead of a unit that cannot run.
     """
+    for c in plan.get("characters", []):
+        # dna is derived from the structured layers so it can never drift from them; a plan
+        # that predates the layers keeps whatever compact dna it shipped.
+        derived = character_dna(c.get("identity"), c.get("wardrobe", ""), c.get("bearing", ""))
+        if derived:
+            c["dna"] = derived
+        # The sheet is composed, not authored: a fixed studio contract plus this character's
+        # identity, so every founding sheet shares one backdrop and one composition. The
+        # director still approves — and may note-edit — the composed prompt at the sheets gate.
+        c["sheet_prompt"] = sheet_prompt(style, c.get("dna", ""))
+
     dna = {c["id"]: c.get("dna", "") for c in plan.get("characters", [])}
     envs = {e["id"]: e.get("desc", "") for e in plan.get("environments", [])}
-
-    for c in plan.get("characters", []):
-        c["sheet_prompt"] = (_lead(style, c.get("sheet_prompt"))
-                             or sheet_prompt(style, c.get("dna", "")))
 
     for e in plan.get("environments", []):
         e["plate_prompt"] = (_lead(style, e.get("plate_prompt"))

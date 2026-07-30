@@ -174,21 +174,43 @@ def _all_projects() -> list[models.Project]:
     return list(out.values())
 
 
-def list_projects() -> list[dict]:
-    """Library view — one card per project with a cover thumbnail."""
+def list_projects(owner_id: str | None = None) -> list[dict]:
+    """Library view — one card per project with a cover thumbnail.
+
+    `owner_id` scopes the library to one user (auth-enabled mode); legacy projects with no
+    owner are dropped rather than leaked. `None` returns everything — the auth-off default.
+    """
     out = []
     for p in _all_projects():
-        cover = next((n.asset.thumbnail for n in p.nodes
-                      if n.asset and n.asset.thumbnail), None)
-        out.append({
-            "project_id": p.project_id,
-            "title": p.title,
-            "idea": p.idea,
-            "cover": cover,
-            "node_count": len(p.nodes),
-            "export_url": p.export_url,
-        })
+        if owner_id is not None and p.owner_id != owner_id:
+            continue
+        out.append(_card(p))
     return out
+
+
+def _card(p: models.Project) -> dict:
+    """One library/gallery card — a cover thumbnail and the fields a grid tile shows."""
+    cover = next((n.asset.thumbnail for n in p.nodes
+                  if n.asset and n.asset.thumbnail), None)
+    return {
+        "project_id": p.project_id,
+        "title": p.title,
+        "idea": p.idea,
+        "cover": cover,
+        "node_count": len(p.nodes),
+        "export_url": p.export_url,
+        "visibility": p.visibility.value,
+    }
+
+
+def list_public() -> list[dict]:
+    """The public gallery — every film its owner marked public, across all owners.
+
+    This is the template library on the homepage. Unlike `list_projects` it is not scoped
+    to a caller: a public film is meant to be seen by anyone, signed in or not.
+    """
+    return [_card(p) for p in _all_projects()
+            if p.visibility == models.Visibility.PUBLIC]
 
 
 def all_assets() -> list[dict]:

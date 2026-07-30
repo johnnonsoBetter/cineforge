@@ -39,10 +39,10 @@ export function nodeStats(node, nodes) {
       ];
     case 'keyframe':
       // A master frame's job is to be shot from, so how much coverage it carries is the
-      // number worth putting on the card.
+      // number worth putting on the card. The QC verdict rides as a pill on the frame itself
+      // (see CineNode), so it is deliberately not repeated here.
       return [
         ['Setups', count('shot')],
-        node.qc && ['QC', node.qc.verdict],
         takes > 1 && ['Takes', takes],
       ];
     case 'shot':

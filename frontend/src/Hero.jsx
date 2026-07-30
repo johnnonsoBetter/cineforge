@@ -25,7 +25,7 @@ export default function Hero({ onForge, busy }) {
           One idea becomes a finished cinematic short — screenplay, cast, keyframes, animated shots, final cut.
         </div>
 
-        <div className="hero-card">
+        <div className={`hero-card${busy ? ' forging' : ''}`}>
           <textarea
             value={idea}
             autoFocus

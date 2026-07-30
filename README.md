@@ -49,9 +49,16 @@ MOCK_MODE=true uvicorn backend.app:app --reload --port 8000
 ## Go live (M1)
 
 ```bash
-pip install genblaze-core genblaze-gmicloud genblaze-s3 genblaze-elevenlabs
+pip install genblaze-core genblaze-gmicloud genblaze-s3 genblaze-openai genblaze-elevenlabs
 cp backend/.env.example backend/.env   # fill B2_KEY_ID, B2_APP_KEY, GMI_API_KEY; set MOCK_MODE=false
+python -m backend.scripts.smoke_real   # one real still→video→B2 round-trip; fails loud on any drift
 ```
+
+**The B2 bucket must be public.** Generated media URLs are durable but credential-free, and
+the canvas renders them straight into `<img>`/`<video>`. A *private* bucket returns 403 to the
+browser, so every asset shows up broken. Make the bucket public at creation (or front it with a
+CDN via `public_url_base`). Add `OPENAI_API_KEY` too — the QC judge is a vision call and rubber-
+stamps every frame without it.
 
 Switch `PROVIDER_STACK=openai` to route through OpenAI models (Sora / gpt-image) for the
 OpenAI Build Week reuse — no other code changes.

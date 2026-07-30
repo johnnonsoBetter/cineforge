@@ -4,9 +4,15 @@ uvicorn[standard]>=0.29
 pydantic>=2.6
 python-dotenv>=1.0
 
-# Genblaze (real generation) — installed for M1+. Mock mode runs without these.
-# genblaze-core
-# genblaze-gmicloud
-# genblaze-s3
-# genblaze-elevenlabs
-# genblaze-openai
+# Auth — verifies Supabase-issued JWTs (HS256). Only used when SUPABASE_* env is set; the
+# app runs single-user without it.
+pyjwt>=2.8
+
+# Genblaze (real generation) — required for M1+ (MOCK_MEDIA=false). Mock mode runs without
+# these. Pinned to the 0.3.x line the client was verified against (Pipeline/Asset/manifest
+# shapes, route_images input routing, S3StorageBackend.for_backblaze env fallback).
+genblaze-core>=0.3.7,<0.4
+genblaze-gmicloud>=0.3.4,<0.4
+genblaze-s3>=0.3.6,<0.4
+genblaze-elevenlabs>=0.3.2,<0.4
+genblaze-openai>=0.3.3,<0.4

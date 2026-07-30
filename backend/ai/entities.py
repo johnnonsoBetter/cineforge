@@ -276,10 +276,17 @@ def _descendants(project: Project, node_id: str) -> list[Node]:
     return out
 
 
-def mark_stale(project: Project, node_id: str) -> list[Node]:
-    """Invalidate everything that inherited from a node. Returns what changed."""
+def mark_stale(project: Project, node_id: str, skip=None) -> list[Node]:
+    """Invalidate everything that inherited from a node. Returns what changed.
+
+    `skip` names descendants to leave current for this pass — a one-off "keep it as it is",
+    not a lock: it is honoured here and forgotten, so the next change stales it as normal.
+    """
+    skip = skip or ()
     out = []
     for d in _descendants(project, node_id):
+        if d.node_id in skip:
+            continue
         d.status = NodeStatus.STALE
         out.append(d)
     return out
