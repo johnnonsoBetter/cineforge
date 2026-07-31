@@ -213,7 +213,7 @@ def _gated(node: Node, kind: NodeKind, generate, target: "qc_agent.Target",
 
 
 def _render_gated(kind: NodeKind, generate, target: "qc_agent.Target", budget: int,
-                  parent_run_id: str | None):
+                  parent_run_id: str | None, on_progress=None):
     """The gate's I/O half, pure and thread-safe — render → review → re-render on a hard fail.
 
     This is `_gated` with every graph mutation and event yield removed, so it is safe to run
@@ -224,7 +224,8 @@ def _render_gated(kind: NodeKind, generate, target: "qc_agent.Target", budget: i
     """
     attempt = 0
     while True:
-        res = generate(attempt, parent_run_id)
+        res = (generate(attempt, parent_run_id, on_progress)
+               if on_progress else generate(attempt, parent_run_id))
         asset = Asset(kind=kind, url=res.url, thumbnail=res.thumbnail,
                       duration_sec=res.duration_sec, provenance=res.provenance)
         report = qc_agent.review(kind, asset, target, attempt=attempt)
@@ -244,13 +245,11 @@ def _settle(node: Node, asset: Asset, report, attempt: int, *, note: str | None 
     node.status = NodeStatus.READY if qc_agent.accepted(report) else NodeStatus.FLAGGED
 
 
-# ---- concurrent fan-out for the still passes -------------------------------
+# ---- concurrent fan-out for independent generation units ------------------
 #
-# The units of a still pass do not depend on one another — every founding sheet stands alone,
-# and every keyframe is composed against the locked sheets rather than against a sibling frame
-# — so they render together instead of end to end. The video pass stays serial: it is the
-# expensive, rate-sensitive one, and animating from an already-approved still is exactly where
-# a burst of concurrent calls costs the most and helps the least.
+# Sheets, keyframes and shots do not depend on siblings in the same pass, so they can render
+# together. Video uses its own lower concurrency cap because it is expensive and providers
+# commonly allow fewer simultaneous jobs.
 
 # One unit of work for the pool: the node it settles onto, a label for its failure report, the
 # render closure, the brief it is judged against, its regen budget, and the run it descends from.
@@ -258,7 +257,8 @@ _Unit = namedtuple("_Unit", "node what generate target budget parent")
 
 
 def _fanout(work: list["_Unit"], *, stage: str, done: int, total: int,
-            project_id: str) -> Iterator[StageEvent]:
+            project_id: str, concurrency: int | None = None,
+            provider_progress: bool = False) -> Iterator[StageEvent]:
     """Render a batch of independent units concurrently; commit each one as it lands.
 
     Workers run only `_render_gated` — the pure render/review loop, which is network-bound and
@@ -270,27 +270,46 @@ def _fanout(work: list["_Unit"], *, stage: str, done: int, total: int,
     back — and the monitor still ticks once per unit. A unit that raises carries its failure
     onto its node and the run continues, the same contract `_safe` gives the serial passes.
     """
-    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+    from queue import SimpleQueue
     if not work:
         return
-    with ThreadPoolExecutor(max_workers=max(1, cfg.GEN_CONCURRENCY)) as pool:
-        futures = {pool.submit(_render_gated, u.node.kind, u.generate, u.target,
-                               u.budget, u.parent): u for u in work}
-        for fut in as_completed(futures):
-            u = futures[fut]
-            node = u.node
-            try:
-                asset, report, attempt = fut.result()
-            except Exception as e:
-                node.status = NodeStatus.FAILED
-                node.qc = qc_agent.error_report(u.what, e)
-            else:
-                node.asset = asset
-                _settle(node, asset, report, attempt)
-                yield _qc_ev(node, report, project_id)
-            done += 1
-            yield _ev(type="node", node=node, project_id=project_id)
-            yield _progress(stage, done, total, project_id)
+    progress_events = SimpleQueue()
+    workers = concurrency if concurrency is not None else cfg.GEN_CONCURRENCY
+    with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+        futures = {}
+        for u in work:
+            callback = None
+            if provider_progress:
+                callback = lambda event, node_id=u.node.node_id: progress_events.put((node_id, event))
+            future = pool.submit(_render_gated, u.node.kind, u.generate, u.target,
+                                 u.budget, u.parent, callback)
+            futures[future] = u
+
+        pending = set(futures)
+        while pending:
+            completed, pending = wait(pending, timeout=0.25, return_when=FIRST_COMPLETED)
+            while not progress_events.empty():
+                node_id, event = progress_events.get()
+                pct = (round(event.progress_pct * 100) if event.progress_pct is not None else None)
+                phase = f"provider:{event.status}" + (f":{pct}" if pct is not None else "")
+                yield _phase_ev(next(u.node for u in work if u.node.node_id == node_id),
+                                phase, project_id)
+            for fut in completed:
+                u = futures[fut]
+                node = u.node
+                try:
+                    asset, report, attempt = fut.result()
+                except Exception as e:
+                    node.status = NodeStatus.FAILED
+                    node.qc = qc_agent.error_report(u.what, e)
+                else:
+                    node.asset = asset
+                    _settle(node, asset, report, attempt)
+                    yield _qc_ev(node, report, project_id)
+                done += 1
+                yield _ev(type="node", node=node, project_id=project_id)
+                yield _progress(stage, done, total, project_id)
 
 
 def _prompt_of(project: Project, node: Node) -> str:
@@ -594,13 +613,15 @@ def stage_video(project: Project) -> Iterator[StageEvent]:
     done = sum(1 for *_x, kf in units if _shot_of(project, kf))
     yield _progress("video", done, total, pid)
 
+    work = []
+    voiced: list[tuple[Node, str]] = []
     for scene_node, scene, i, unit, kf in units:
         if _shot_of(project, kf):
             continue
-        done += 1
         if not kf.asset:
             # No still to animate — tick anyway so the bar still reaches its total instead of
             # stalling on a unit whose frame already failed.
+            done += 1
             yield _progress("video", done, total, pid)
             continue
 
@@ -613,23 +634,29 @@ def stage_video(project: Project) -> Iterator[StageEvent]:
             data={"vo": scene.get("vo", ""), "n": n, "i": i,
                   "setup": kf.data.get("setup", ""), "coverage": unit,
                   "prompt": unit.get("video_prompt", "")}))
-        with _safe(shot, "animation"):
-            prompt = _prompt_of(project, shot)
-            # Judged against the still it was animated from, on frames sampled across the
-            # whole clip — that's how a face that morphs at second four is caught.
-            asset, report, attempt = yield from _gated(
-                shot, NodeKind.SHOT,
-                lambda _a, p: gb.image_to_video(kf.asset.url, prompt, duration=SHOT_SECONDS,
-                                                aspect_ratio=aspect, parent_run_id=p,
-                                                framing=unit.get("shot"), move=unit.get("move")),
-                _target_for(project, shot), cfg.QC_MAX_VIDEO_REGENS, pid)
-            _settle(shot, asset, report, attempt)
-            # One voiceover per scene, on its first unit — repeating the line on every setup
-            # would stammer it.
-            if i == 0:
-                yield from _add_vo(project, shot, scene.get("vo", ""))
         yield _ev(type="node", node=shot, project_id=pid)
-        yield _progress("video", done, total, pid)
+        prompt = _prompt_of(project, shot)
+        generate = (lambda _a, p, progress, image_url=kf.asset.url, prompt=prompt, unit=unit:
+                    gb.image_to_video(image_url, prompt, duration=SHOT_SECONDS,
+                                      aspect_ratio=aspect, parent_run_id=p,
+                                      framing=unit.get("shot"), move=unit.get("move"),
+                                      on_progress=progress))
+        work.append(_Unit(shot, "animation", generate, _target_for(project, shot),
+                          cfg.QC_MAX_VIDEO_REGENS, None))
+        if i == 0:
+            voiced.append((shot, scene.get("vo", "")))
+
+    if work:
+        yield _ev(label=f"Shooting {len(work)} scene setup(s) in parallel…", project_id=pid)
+    yield from _fanout(work, stage="video", done=done, total=total, project_id=pid,
+                       concurrency=cfg.VIDEO_CONCURRENCY, provider_progress=True)
+
+    # Voiceover is cheap and optional; attach it after the parallel video batch so it never
+    # occupies a scarce video worker slot or delays another clip from being submitted.
+    for shot, line in voiced:
+        if shot.status != NodeStatus.FAILED:
+            yield from _add_vo(project, shot, line)
+            yield _ev(type="node", node=shot, project_id=pid)
 
     yield from _assemble(project)
 

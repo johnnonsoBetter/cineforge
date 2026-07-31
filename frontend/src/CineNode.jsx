@@ -15,6 +15,10 @@ const RENDER_VERB = {
 function phaseLabel(kind, phase) {
   if (phase === 'reviewing') return 'reviewing quality';
   if (phase === 'rerendering') return 're-rendering';
+  if (phase?.startsWith('provider:')) {
+    const [, status, pct] = phase.split(':');
+    return pct ? `${status} ${pct}%` : status;
+  }
   return RENDER_VERB[kind] || 'rendering';
 }
 

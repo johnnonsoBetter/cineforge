@@ -258,7 +258,8 @@ def generate_image(prompt: str, *, seed: str = "x", ref_urls: list[str] | None =
 
 def image_to_video(image_url: str, prompt: str, *, duration: int = 8,
                    aspect_ratio: str = "16:9", framing: str | None = None,
-                   move: str | None = None, parent_run_id: str | None = None) -> GenResult:
+                   move: str | None = None, parent_run_id: str | None = None,
+                   on_progress=None) -> GenResult:
     """Animate an approved master frame into one shot — the consistency-preserving step.
 
     Every setup of a scene is animated from the same approved still, so the frame a human
@@ -288,7 +289,7 @@ def image_to_video(image_url: str, prompt: str, *, duration: int = 8,
     if cfg.video_fallbacks():
         step_kwargs["fallback_models"] = cfg.video_fallbacks()
     pipe = _chain(Pipeline("image-to-video").step(provider, **step_kwargs), parent_run_id)
-    result = pipe.run(sink=_storage(), timeout=600)
+    result = pipe.run(sink=_storage(), timeout=600, on_progress=on_progress)
     asset = _first_asset(result, f"video ({model})")
     prov = summarize_manifest(result.manifest, prompt)
     prov.provider, prov.model, prov.sha256 = cfg.PROVIDER_STACK, model, getattr(asset, "sha256", None)

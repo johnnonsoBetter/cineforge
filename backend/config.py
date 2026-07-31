@@ -85,9 +85,11 @@ class Config:
     # passes fan their units out across a small thread pool — each unit is a blocking provider
     # call that spends most of its time waiting on the network, so a handful in flight cuts a
     # pass's wall time without touching cost. Kept small by default so a burst never trips the
-    # provider's own concurrency/rate cap; raise it once you know your plan's limit. Video
-    # stays serial (the expensive, rate-sensitive pass), so this does not apply there.
+    # provider's own concurrency/rate cap; raise it once you know your plan's limit.
     GEN_CONCURRENCY = int(os.getenv("GEN_CONCURRENCY", "3"))
+    # Video is the longest pass and benefits most from overlap, but each request is expensive
+    # and providers commonly enforce a tighter cap. Keep its independent default conservative.
+    VIDEO_CONCURRENCY = int(os.getenv("VIDEO_CONCURRENCY", "2"))
 
     # Where projects + exports land when B2 isn't configured (and the local cache when it is).
     DATA_DIR = os.getenv("DATA_DIR", ".data")
