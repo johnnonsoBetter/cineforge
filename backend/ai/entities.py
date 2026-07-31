@@ -190,6 +190,10 @@ def project_view(project: Project) -> dict:
     data["nodes"] = [node_view(n, names).model_dump() for n in project.nodes]
     data["references"] = {eid: [r.__dict__ for r in refs]
                           for eid, refs in back_references(project).items()}
+    # Undo snapshots are implementation state, not a public payload. The visible ledger keeps
+    # the human-readable decision and target while storage retains the exact restore point.
+    data["edit_history"] = [r.model_dump(exclude={"before_nodes"})
+                            for r in project.edit_history]
     return data
 
 

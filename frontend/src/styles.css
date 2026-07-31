@@ -487,6 +487,7 @@ button:disabled { cursor: default; }
   transition: border-color 0.15s;
 }
 .composer:focus-within { border-color: var(--line-strong); }
+.composer:has(textarea:disabled) { opacity: 0.72; }
 .composer textarea {
   flex: 1;
   border: none;
@@ -511,6 +512,11 @@ button:disabled { cursor: default; }
 }
 .composer-send.on { background: var(--gold); color: #2a1f0f; }
 .composer-send.on:hover { filter: brightness(1.08); }
+.composer-send:focus-visible, .composer-at:focus-visible,
+.proposal button:focus-visible, .proposal-edit:focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: 2px;
+}
 .rail-hint { margin-top: 9px; font-family: var(--mono); font-size: 10px; line-height: 1.5; color: var(--faint); }
 
 /* ---------- stage / canvas area ---------- */
@@ -2649,6 +2655,12 @@ button:disabled { cursor: default; }
   font-size: 14px;
   padding: 3px 1px 5px;
 }
+.proposal-undo-copy {
+  padding: 4px 1px 6px;
+  color: var(--cream);
+  font-size: 13px;
+  line-height: 1.5;
+}
 .proposal-from { color: var(--faint); text-decoration: line-through; }
 .proposal-arrow { color: var(--gold); }
 .proposal-to { color: var(--cream); }
@@ -2708,6 +2720,36 @@ button:disabled { cursor: default; }
 
 .proposal-actions { display: flex; gap: 8px; margin-top: 11px; }
 .proposal-actions .btn-gold { flex: 1; }
+.proposal-actions .btn-gold, .proposal-actions .btn { min-height: 40px; }
+
+.edit-history {
+  margin: 0 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.14);
+}
+.edit-history summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 40px;
+  padding: 0 12px;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.edit-history summary em { color: var(--gold); font-style: normal; }
+.edit-history ol { list-style: none; margin: 0; padding: 0 8px 8px; display: grid; gap: 4px; }
+.edit-history li { display: flex; align-items: center; gap: 8px; border-top: 1px solid var(--line); }
+.history-copy { flex: 1; min-width: 0; padding: 8px 4px; text-align: left; color: var(--cream); }
+.history-copy span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.history-copy em { display: block; margin-top: 2px; color: var(--faint); font-family: var(--mono); font-size: 9px; font-style: normal; text-transform: uppercase; }
+.edit-history li.undone .history-copy span { color: var(--faint); text-decoration: line-through; }
+.history-undo { min-width: 48px; min-height: 36px; color: var(--gold); font-size: 11px; }
+.history-undo:hover:not(:disabled) { color: var(--cream); }
 
 /* The gate speaking in the conversation, alongside the reviewer's per-asset voice. */
 .msg-gate {
@@ -3745,4 +3787,3 @@ button:disabled { cursor: default; }
   font-family: var(--mono); font-size: 10px;
   letter-spacing: 0.12em; text-transform: uppercase; color: var(--faint);
 }
-

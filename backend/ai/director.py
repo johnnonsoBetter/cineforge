@@ -25,6 +25,8 @@ where a wrong character sheet costs one re-render instead of a whole film of the
 person.
 """
 from __future__ import annotations
+import copy
+import re
 import time
 from collections import namedtuple
 from typing import Iterator
@@ -1407,6 +1409,36 @@ def propose_edit(project: Project, instruction: str, target_node_id: str | None)
     names = project.entity_names()
     change, new_name = "semantic", None
 
+    active_edits = [e for e in project.edit_history if e.undone_at is None]
+    last_edit = active_edits[-1] if active_edits else None
+    undo_note = bool(re.match(r"^\s*(undo|revert|take back)(\s+(that|it|the last edit))?[.!]?\s*$",
+                              instruction, re.I))
+    if undo_note:
+        if not last_edit:
+            return {"ok": False, "reason": "There isn't an applied edit to undo yet."}
+        target = project.get(last_edit.target_node_id)
+        if not target:
+            return {"ok": False, "reason": "The last edit's target is no longer on the canvas."}
+        title = entities.resolve(target.title, names)
+        return {
+            "ok": True, "target": {"node_id": target.node_id, "title": title,
+                                    "kind": target.kind.value},
+            "change": "undo", "edit_id": last_edit.edit_id, "field": None,
+            "from": None, "to": None, "note": instruction,
+            "rendered": last_edit.rendered,
+            "impact": _edit_impact(project, target,
+                                   "rename" if last_edit.change == "rename" else "note", None),
+            "summary": f"Undo: {last_edit.summary}",
+        }
+
+    # Short follow-ups inherit the last applied target. Explicit canvas selection/@ mention
+    # still wins; ordinary standalone notes still go through the full intent router.
+    contextual = bool(re.match(
+        r"^\s*((make|change|adjust|push|give)\s+(it|that|this)\b|"
+        r"(even|slightly|more|less|a bit)\b)", instruction, re.I))
+    if not target_node_id and contextual and last_edit:
+        target_node_id = last_edit.target_node_id
+
     if target_node_id:
         target = project.get(target_node_id)
         new_name = route.rename_intent(instruction)
@@ -1491,11 +1523,72 @@ def apply_edit(project: Project, req) -> Iterator[StageEvent]:
 
     names = project.entity_names()
 
+    if req.change == "undo":
+        active = next((e for e in reversed(project.edit_history) if e.undone_at is None), None)
+        if not active or active.edit_id != req.edit_id:
+            yield _ev(type="error", label="That edit is no longer the latest change. "
+                      "Refresh the history and try again.", project_id=pid)
+            return
+        if active.target_node_id != node.node_id:
+            yield _ev(type="error", label="That undo no longer matches its target.", project_id=pid)
+            return
+
+        if active.change == "rename" and active.before_name and node.data.get("id"):
+            current = entities.resolve(node.title, names)
+            for changed in entities.rename_entity(project, node.data["id"], active.before_name):
+                yield _ev(type="node", node=changed, project_id=pid)
+            active.undone_at = time.time()
+            yield _ev(type="done", label=f"Undid the rename — {current} is {active.before_name} again. "
+                      "No frames were re-rendered.", project_id=pid)
+            return
+
+        for node_id, data in active.before_nodes.items():
+            restored = project.get(node_id)
+            if restored:
+                restored.data = copy.deepcopy(data)
+        active.undone_at = time.time()
+        yield _ev(type="node", node=node, project_id=pid)
+        if active.rendered:
+            yield from regenerate_node(project, node.node_id, note=None)
+        else:
+            for rec in resync_stages(project):
+                yield _stage_ev(rec, pid)
+            yield _ev(type="done", label=f"Undid the last change to {node.title}. "
+                      "Nothing had rendered, so no new assets were needed.", project_id=pid)
+        return
+
+    # The proposal is advisory UI, not an authorization token. Re-check the edit shape here
+    # so a stale or hand-crafted client cannot write an unrelated field onto a node.
+    expected_field = _EDITABLE.get(node.kind, (None, None))[0]
+    if req.change == "field" and (not req.field or req.field != expected_field or req.to is None
+                                   or not req.to.strip()):
+        yield _ev(type="error", label="That proposed text edit no longer matches its target. "
+                  "Please preview the note again.", project_id=pid)
+        return
+    if req.change == "rename" and (not req.new_name or not req.new_name.strip()
+                                    or not node.data.get("id")):
+        yield _ev(type="error", label="That rename is incomplete. Please preview it again.",
+                  project_id=pid)
+        return
+    if req.change == "note" and (not req.note or not req.note.strip()):
+        yield _ev(type="error", label="That edit note is empty. Please add the direction "
+                  "you want applied.", project_id=pid)
+        return
+
+    affected = [node] + _descendants_of(project, node)
+    before_nodes = {n.node_id: copy.deepcopy(n.data) for n in affected}
+    rendered_before = bool(_rendered_under(project, node))
+
     if req.change == "rename" and req.new_name and node.data.get("id"):
         old = entities.resolve(node.title, names)
         yield _ev(label=f"Renaming {old} to {req.new_name} everywhere…", project_id=pid)
         for n in entities.rename_entity(project, node.data["id"], req.new_name):
             yield _ev(type="node", node=n, project_id=pid)
+        project.edit_history.append(models.EditRecord(
+            target_node_id=node.node_id, target_title=req.new_name,
+            target_kind=node.kind.value, change="rename",
+            summary=f"Renamed {old} to {req.new_name}", instruction=req.note or "",
+            before_name=old, after=req.new_name, rendered=False))
         yield _ev(type="done", project_id=pid,
                   label=f"{old} is now {req.new_name} — across the story, every scene and "
                         f"the voiceover. No frames needed re-rendering.")
@@ -1509,7 +1602,15 @@ def apply_edit(project: Project, req) -> Iterator[StageEvent]:
 
     note = req.note or None
 
-    if _rendered_under(project, node):
+    project.edit_history.append(models.EditRecord(
+        target_node_id=node.node_id, target_title=entities.resolve(node.title, names),
+        target_kind=node.kind.value, change=req.change,
+        summary=(f"Changed {entities.resolve(node.title, names)}'s {req.field}"
+                 if req.change == "field" else f"Applied a note to {entities.resolve(node.title, names)}"),
+        instruction=note or "", field=req.field, before_nodes=before_nodes,
+        after=req.to if req.change == "field" else note, rendered=rendered_before))
+
+    if rendered_before:
         # Something downstream exists — carry the change through it.
         yield from regenerate_node(project, node.node_id, note=note)
         return

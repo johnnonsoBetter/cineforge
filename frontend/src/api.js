@@ -298,6 +298,7 @@ export function applyEdit(projectId, proposal, onEvent, signal) {
       to: proposal.to ?? null,
       note: proposal.note || null,
       new_name: proposal.new_name || null,
+      edit_id: proposal.edit_id || null,
     },
   }, onEvent, signal);
 }

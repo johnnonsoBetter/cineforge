@@ -53,6 +53,7 @@ function Studio({ session }) {
   const [stages, setStages] = useState(seedStages()); // the stage board
   const [impact, setImpact] = useState(null);         // blast radius of changing the selection
   const [proposal, setProposal] = useState(null);     // a proposed edit, awaiting approval
+  const [editHistory, setEditHistory] = useState([]); // persisted applied edits + undo state
   const [progress, setProgress] = useState({});       // stage key -> { done, total }
   const [phases, setPhases] = useState({});           // node_id -> transient beat (reviewing/rerendering)
   const [menu, setMenu] = useState(null);             // { x, y, nodeId }
@@ -61,6 +62,7 @@ function Studio({ session }) {
   const [visibility, setVis] = useState('private');   // 'private' | 'public' — the open film's share state
 
   const abortRef = useRef(null);
+  const proposalRequestRef = useRef(false);
   const rf = useReactFlow();
 
   // The URL is the source of truth for which film is open: `/` is the empty state, `/p/:id`
@@ -93,6 +95,12 @@ function Studio({ session }) {
     const id = pid || projectId;
     if (!id) return;
     api.getProject(id).then((p) => setReferences(p.references || {})).catch(() => {});
+  }, [projectId]);
+
+  const loadEditHistory = useCallback((pid) => {
+    const id = pid || projectId;
+    if (!id) return;
+    api.getProject(id).then((p) => setEditHistory(p.edit_history || [])).catch(() => {});
   }, [projectId]);
 
   // One stage's row on the board, patched in place.
@@ -185,6 +193,7 @@ function Studio({ session }) {
     setPhases({});
     setStages(seedStages());
     setVis('private');
+    setEditHistory([]);
     setMessages((m) => [...m, mkMsg('user', idea)]);
     try {
       const { project_id } = await api.createProject(idea, settings);
@@ -221,6 +230,7 @@ function Studio({ session }) {
       setProjectId(pid);
       setNodes(p.nodes || []);
       setReferences(p.references || {});
+      setEditHistory(p.edit_history || []);
       setExportUrl(p.export_url || null);
       setVis(p.visibility || 'private');
       setSelectedId(null);
@@ -244,7 +254,7 @@ function Studio({ session }) {
   const clearView = useCallback(() => {
     abortRef.current?.abort();
     setNodes([]); setProjectId(null); setSelectedId(null); setBuilt(false); setBusy(false);
-    setReferences({}); setExportUrl(null); setProgress({}); setPhases({}); setStages(seedStages()); setVis('private');
+    setReferences({}); setEditHistory([]); setProposal(null); setExportUrl(null); setProgress({}); setPhases({}); setStages(seedStages()); setVis('private');
     setMessages([mkMsg('director', "Give me one idea. I'll direct the whole film — story, cast, locations, keyframes, animated shots, final cut — and log every frame to Backblaze B2.")]);
   }, []);
 
@@ -426,17 +436,24 @@ function Studio({ session }) {
   // A note doesn't apply — it proposes. The director reads the proposal above the input and
   // approves, edits or drops it; nothing is written or re-rendered until they do.
   const proposeEdit = useCallback(async (instruction, refs = []) => {
-    if (!projectId || busy) return;
+    if (!projectId || busy || proposal || proposalRequestRef.current) return false;
+    proposalRequestRef.current = true;
     pushMsg('user', instruction);
     const target = refs[0]?.nodeId || selectedId;
     try {
       const p = await api.proposeEdit(projectId, instruction, target);
-      if (p.ok) setProposal(p);
-      else pushMsg('error', p.reason || "I couldn't work out what that note meant.");
+      if (p.ok) {
+        setProposal(p);
+        return true;
+      }
+      pushMsg('error', p.reason || "I couldn't work out what that note meant.");
     } catch (e) {
       pushMsg('error', `I couldn't read that note: ${e.message}`);
+    } finally {
+      proposalRequestRef.current = false;
     }
-  }, [projectId, busy, selectedId, pushMsg]);
+    return false;
+  }, [projectId, busy, proposal, selectedId, pushMsg]);
 
   const applyProposal = useCallback(async (p) => {
     if (!projectId || busy) return;
@@ -447,15 +464,21 @@ function Studio({ session }) {
       abortRef.current = ctrl;
       await api.applyEdit(projectId, p, handleEvent, ctrl.signal);
       loadReferences();
+      loadEditHistory();
     } catch (e) {
       if (e.name !== 'AbortError') pushMsg('error', `That edit failed: ${e.message}`);
     } finally {
       setBusy(false);
       abortRef.current = null;
     }
-  }, [projectId, busy, handleEvent, pushMsg, loadReferences]);
+  }, [projectId, busy, handleEvent, pushMsg, loadReferences, loadEditHistory]);
 
   const discardProposal = useCallback(() => setProposal(null), []);
+
+  const undoEdit = useCallback(() => {
+    if (busy || proposal) return false;
+    return proposeEdit('Undo that edit');
+  }, [busy, proposal, proposeEdit]);
 
   // ---- rename an entity (free: nothing is re-rendered) ----
   const renameEntity = useCallback(async (entityId, newName) => {
@@ -706,6 +729,8 @@ function Studio({ session }) {
             onFocusNode={setSelectedId}
             onPropose={proposeEdit}
             proposal={proposal}
+            editHistory={editHistory}
+            onUndoEdit={undoEdit}
             onApplyProposal={applyProposal}
             onDiscardProposal={discardProposal}
             busy={busy}

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import Monitor from './Monitor.jsx';
 import EditProposal from './EditProposal.jsx';
+import EditHistory from './EditHistory.jsx';
 import RegenMenu from './RegenMenu.jsx';
 import MentionMenu from './MentionMenu.jsx';
 import { KIND_LABEL } from './ui.js';
@@ -12,6 +13,7 @@ import {
 // keeps the director/user turns, and hosts the conversational-edit composer.
 export default function Rail({ messages, canEdit, nodes, targetNode, onClearTarget, onFocusNode,
                                onPropose, proposal, onApplyProposal, onDiscardProposal,
+                               editHistory, onUndoEdit,
                                busy, progress, current, stages,
                                openGate, onApproveStage, onHoldStage, onSelectNode,
                                impact, onRegenerate, onToggleLock }) {
@@ -21,6 +23,7 @@ export default function Rail({ messages, canEdit, nodes, targetNode, onClearTarg
   const [scopeId, setScopeId] = useState(null); // drilled into this node's connections
   const [cursor, setCursor] = useState(0);
   const [dismissedAt, setDismissedAt] = useState(null);
+  const [proposing, setProposing] = useState(false);
   const logRef = useRef(null);
   const taRef = useRef(null);
 
@@ -54,7 +57,8 @@ export default function Rail({ messages, canEdit, nodes, targetNode, onClearTarg
     return set;
   }, [entries, nodes]);
 
-  const open = !!range && entries.length > 0 && range.start !== dismissedAt && !busy;
+  const composerLocked = busy || proposing || !!proposal;
+  const open = !!range && entries.length > 0 && range.start !== dismissedAt && !composerLocked;
   const active = entries[Math.min(cursor, entries.length - 1)] || null;
 
   useEffect(() => { setCursor(0); }, [range?.query, scopeId]);
@@ -117,16 +121,25 @@ export default function Rail({ messages, canEdit, nodes, targetNode, onClearTarg
     write(`${draft.slice(0, at)}${pad}@${draft.slice(at)}`, at + pad.length + 1);
   };
 
-  // Sending doesn't apply the note — it proposes it. The draft clears because the note is now
-  // captured in the proposal card above, where it can be read, tweaked or dropped.
-  const send = () => {
+  // Sending doesn't apply the note — it proposes it. The draft clears only after the note is
+  // safely captured in the proposal card; failed requests leave the director's words intact.
+  const send = async () => {
     const text = draft.trim();
-    if (!text || busy) return;
-    onPropose(text, liveRefs(text, refs));
-    setDraft('');
-    setRefs([]);
-    setScopeId(null);
-    setCaret(0);
+    if (!text || composerLocked) return;
+    setProposing(true);
+    try {
+      const accepted = await onPropose(text, liveRefs(text, refs));
+      // Keep the note intact when routing or the request fails. Losing the director's words
+      // on a network error makes the conversational surface feel unsafe.
+      if (accepted) {
+        setDraft('');
+        setRefs([]);
+        setScopeId(null);
+        setCaret(0);
+      }
+    } finally {
+      setProposing(false);
+    }
   };
 
   const keyDown = (e) => {
@@ -197,7 +210,7 @@ export default function Rail({ messages, canEdit, nodes, targetNode, onClearTarg
           <div className="target-chip">
             <span className="dot" style={{ background: 'var(--gold)' }} />
             Editing: {targetNode.title}
-            <button onClick={onClearTarget} title="Clear target">✕</button>
+            <button onClick={onClearTarget} title="Clear target" aria-label="Clear edit target">✕</button>
           </div>
         )}
 
@@ -226,6 +239,13 @@ export default function Rail({ messages, canEdit, nodes, targetNode, onClearTarg
             onFocusNode={onFocusNode}
           />
         )}
+
+        <EditHistory
+          history={editHistory}
+          busy={busy || proposing || !!proposal}
+          onFocusNode={onFocusNode}
+          onUndo={onUndoEdit}
+        />
 
         {/* The regeneration surface, shown only when a rendered entity is selected: what a
             redo would re-render, which of it to skip this pass, and the redo itself — on the
@@ -259,27 +279,35 @@ export default function Rail({ messages, canEdit, nodes, targetNode, onClearTarg
               rows={1}
               value={draft}
               placeholder={canEdit
-                ? (targetNode ? `Change “${targetNode.title}” — or @ to reference…` : 'Describe a change — type @ to reference a scene, character or shot…')
+                ? (proposal ? 'Review or discard the proposal above before adding another note…'
+                  : proposing ? 'Reading your note…'
+                  : targetNode ? `Change “${targetNode.title}” — or @ to reference…` : 'Describe a change — type @ to reference a scene, character or shot…')
                 : 'Forge a film first…'}
-              disabled={!canEdit || busy}
+              disabled={!canEdit || composerLocked}
+              aria-label="Describe an edit"
               onChange={change}
               onKeyDown={keyDown}
               onKeyUp={(e) => sync(e.target)}
               onClick={(e) => sync(e.target)}
               onBlur={() => setDismissedAt(range ? range.start : null)}
             />
-            <button className="composer-at" onClick={openPicker} disabled={!canEdit || busy}
-                    title="Reference a scene, character or shot">
+            <button className="composer-at" onClick={openPicker} disabled={!canEdit || composerLocked}
+                    title="Reference a scene, character or shot" aria-label="Reference a scene, character, or shot">
               @
             </button>
-            <button className={`composer-send ${draft.trim() && canEdit && !busy ? 'on' : ''}`} onClick={send} disabled={!canEdit || busy} title="Send">
-              ↑
+            <button className={`composer-send ${draft.trim() && canEdit && !composerLocked ? 'on' : ''}`} onClick={send} disabled={!canEdit || composerLocked || !draft.trim()}
+                    title="Preview edit" aria-label="Preview edit">
+              {proposing ? '…' : '↑'}
             </button>
           </div>
         </div>
 
         <div className="rail-hint">
-          {canEdit
+          {proposal
+            ? 'Nothing has changed yet. Review the target, wording, and render impact above.'
+            : proposing
+              ? 'Reading the note and calculating its render impact…'
+              : canEdit
             ? 'Type @ to reference a scene, character or shot — press → on a scene to see everything connected to it. Only affected shots re-render.'
             : 'Conversational edits unlock once the film is built.'}
         </div>

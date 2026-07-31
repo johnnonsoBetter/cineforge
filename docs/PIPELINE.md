@@ -411,6 +411,19 @@ does the right thing rather than the proposed thing. Two paths:
   the graph. "The change is baked in for when that pass runs."
 - **Rename** → re-resolve text everywhere, touch no frame.
 
+### Follow-ups, history, and undo
+
+Every approved edit appends a persistent record to the project. This is the conversation's
+memory after a refresh: short follow-ups such as “make it warmer” inherit the most recent
+active edit target when the director has not selected or @-referenced something more explicit.
+
+The same ledger powers both the rail's **Edit history → Undo** action and “undo that” in the
+composer. Undo is last-in-first-out so an older snapshot can never overwrite a newer decision.
+Renames and edits made before rendering undo for free. If pixels were produced from the edit,
+undo restores the exact pre-edit graph/prompt state and creates a compensating take; it never
+deletes generated versions or rewrites provenance. Internal restore snapshots stay in project
+storage and are omitted from API project views.
+
 (`POST /api/edit` / `director.run_edit` is the older one-shot path that applies immediately;
 `propose`/`apply` is the current working surface.)
 

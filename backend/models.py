@@ -2,7 +2,7 @@
 edit upstream can mark downstream nodes stale and offer targeted regeneration."""
 from __future__ import annotations
 from enum import Enum
-from typing import Optional
+from typing import Literal, Optional
 from pydantic import BaseModel, Field
 import time
 import uuid
@@ -258,6 +258,29 @@ class ProjectSettings(BaseModel):
         return max(3, round(self.target_shots() / TYPICAL_COVERAGE))
 
 
+class EditRecord(BaseModel):
+    """One applied conversational edit and the state needed for a compensating undo.
+
+    Generated takes are intentionally not snapshotted or deleted: undo restores graph/prompt
+    state and, when pixels exist, produces a new take. That preserves provenance instead of
+    rewriting history.
+    """
+    edit_id: str = Field(default_factory=lambda: _id("edit"))
+    target_node_id: str
+    target_title: str
+    target_kind: str
+    change: str
+    summary: str
+    instruction: str = ""
+    field: Optional[str] = None
+    before_nodes: dict[str, dict] = Field(default_factory=dict)
+    before_name: Optional[str] = None
+    after: Optional[str] = None
+    rendered: bool = False
+    created_at: float = Field(default_factory=time.time)
+    undone_at: Optional[float] = None
+
+
 class Project(BaseModel):
     project_id: str = Field(default_factory=lambda: _id("proj"))
     # Who owns this film. Optional so projects saved before auth existed still validate; the
@@ -273,6 +296,7 @@ class Project(BaseModel):
     # Private by default: a film only reaches the public gallery or a share link when its
     # owner opts in. Older projects saved before this field validate as private.
     visibility: Visibility = Visibility.PRIVATE
+    edit_history: list[EditRecord] = Field(default_factory=list)
     # When this film was cloned from a public template, the id it came from — so the
     # showcase can credit the original and the two stay navigable.
     forked_from: Optional[str] = None
@@ -379,11 +403,12 @@ class ApplyEditRequest(BaseModel):
     """
     project_id: str
     target_node_id: str
-    change: str                          # "rename" | "field" | "note"
-    field: Optional[str] = None          # field edits only: "dna" | "desc" | "action"
+    change: Literal["rename", "field", "note", "undo"]
+    field: Optional[Literal["dna", "desc", "action"]] = None
     to: Optional[str] = None             # field edits only: the approved new value
     note: Optional[str] = None           # note edits: the instruction to fold into the prompt
     new_name: Optional[str] = None       # rename only
+    edit_id: Optional[str] = None        # undo only: the record being reversed
 
 
 class RegenerateRequest(BaseModel):

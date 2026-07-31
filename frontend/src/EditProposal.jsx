@@ -12,7 +12,7 @@ import { KIND_LABEL } from './ui.js';
 // the director owns the final wording, so a field edit lands in a textarea they can correct
 // before it becomes the bible text every later frame is matched against.
 
-const CHANGE_LABEL = { rename: 'Rename', field: 'Rewrite', note: 'Note' };
+const CHANGE_LABEL = { rename: 'Rename', field: 'Rewrite', note: 'Note', undo: 'Undo' };
 
 export default function EditProposal({ proposal, busy, onApply, onDiscard, onFocusNode }) {
   const [value, setValue] = useState(proposal.to ?? proposal.note ?? '');
@@ -33,18 +33,21 @@ export default function EditProposal({ proposal, busy, onApply, onDiscard, onFoc
   const { target, change, label, impact } = proposal;
   const editsField = change === 'field';
   const isRename = change === 'rename';
+  const isUndo = change === 'undo';
   const stale = impact?.stale || [];
+  const valid = isRename || isUndo || value.trim().length > 0;
 
   // What Apply will actually send: the edited value flows back as the new field text (field
   // edits) or as the note (everything else), so a correction in the box is never lost.
   const apply = () => {
     const v = value.trim();
-    if (busy) return;
-    onApply(editsField ? { ...proposal, to: v } : { ...proposal, note: v || proposal.note });
+    if (busy || !valid) return;
+    if (isRename || isUndo) onApply(proposal);
+    else onApply(editsField ? { ...proposal, to: v } : { ...proposal, note: v || proposal.note });
   };
 
   return (
-    <div className="proposal">
+    <section className="proposal" aria-label="Edit proposal" aria-live="polite">
       <div className="proposal-head">
         <span className="proposal-kind">{CHANGE_LABEL[change] || 'Edit'}</span>
         <button className="proposal-target" onClick={() => onFocusNode(target.node_id)}
@@ -52,11 +55,13 @@ export default function EditProposal({ proposal, busy, onApply, onDiscard, onFoc
           {target.title}
           <em>{KIND_LABEL[target.kind] || target.kind}</em>
         </button>
-        <button className="proposal-x" onClick={onDiscard} disabled={busy} title="Discard">✕</button>
+        <button className="proposal-x" onClick={onDiscard} disabled={busy} title="Discard" aria-label="Discard proposal">✕</button>
       </div>
 
       {/* A rename is a clean before/after with no render — show it as one, not as a box. */}
-      {isRename ? (
+      {isUndo ? (
+        <div className="proposal-undo-copy">{proposal.summary}</div>
+      ) : isRename ? (
         <div className="proposal-rename">
           <span className="proposal-from">{proposal.from}</span>
           <span className="proposal-arrow">→</span>
@@ -78,6 +83,7 @@ export default function EditProposal({ proposal, busy, onApply, onDiscard, onFoc
             onKeyDown={(e) => {
               if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); apply(); }
             }}
+            aria-label={editsField ? `Proposed ${label}` : 'Edit instruction'}
           />
         </>
       )}
@@ -97,12 +103,13 @@ export default function EditProposal({ proposal, busy, onApply, onDiscard, onFoc
       )}
 
       <div className="proposal-actions">
-        <button className="btn-gold" disabled={busy} onClick={apply}>
-          {busy ? 'Working…' : isRename ? 'Rename everywhere →'
+        <button className="btn-gold" disabled={busy || !valid} onClick={apply}>
+          {busy ? 'Working…' : isUndo ? (stale.length ? `Undo & re-render ${stale.length} →` : 'Undo change →')
+            : isRename ? 'Rename everywhere →'
             : stale.length ? `Apply & re-render ${stale.length} →` : 'Apply →'}
         </button>
         <button className="btn" disabled={busy} onClick={onDiscard}>Discard</button>
       </div>
-    </div>
+    </section>
   );
 }
