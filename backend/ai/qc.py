@@ -35,7 +35,7 @@ from pathlib import Path
 
 from ..config import get_config
 from ..models import Asset, NodeKind, QCCheck, QCReference, QCReport
-from ..pipeline import genblaze_client as gb
+from ..pipeline import genblaze_client as gb, storage
 
 cfg = get_config()
 
@@ -126,9 +126,38 @@ def is_video(url: str | None) -> bool:
 # verdict on a video, and the only way for anyone to check what the reviewer actually saw.
 _QC_DIR = Path(cfg.DATA_DIR) / "qc"
 
+# A report should retain the durable B2 URL, but the vision provider should read the local
+# frame we just extracted. B2 buckets may be private, in which case a durable endpoint URL
+# is intentionally not browser/provider-readable. This process-local reverse map lets
+# ``_seeable`` inline those fresh frames without weakening the persisted evidence URL.
+_QC_LOCAL_BY_URL: dict[str, Path] = {}
+
+
+def _persist_frame(path: Path, asset_id: str) -> str:
+    """Upload one sampled frame to B2 and return its durable evidence URL.
+
+    The content hash makes the object idempotent across repeated reviews of the same bytes.
+    When B2 is absent or unavailable, retain the existing locally served URL so QC remains
+    available in development and during a storage outage.
+    """
+    local_url = f"/api/media/qc/{path.name}"
+    try:
+        data = path.read_bytes()
+        digest = hashlib.sha256(data).hexdigest()
+        url = storage.put_bytes(f"qc/{asset_id}/{digest}.jpg", data, "image/jpeg")
+    except Exception:
+        url = None
+    if url:
+        _QC_LOCAL_BY_URL[url] = path
+        return url
+    return local_url
+
 
 def _local_path(url: str) -> Path | None:
     """Map a URL we serve ourselves back to the file behind it."""
+    uploaded = _QC_LOCAL_BY_URL.get(url)
+    if uploaded is not None:
+        return uploaded
     if url.startswith("/api/media/qc/"):
         return _QC_DIR / url.rsplit("/", 1)[-1]
     if url.startswith("/api/media/"):
@@ -206,7 +235,7 @@ def sample_frames(asset: Asset, n: int | None = None) -> list[str]:
                 continue
             if proc.returncode != 0 or not (f.exists() and f.stat().st_size):
                 continue
-        out.append(f"/api/media/qc/{name}")
+        out.append(_persist_frame(f, asset.asset_id))
     return out
 
 
