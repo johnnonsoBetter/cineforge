@@ -328,6 +328,17 @@ def add_keyframe(req: models.AddKeyframeRequest):
     return _sse(director.add_keyframe(p, req.scene_id, req.spec()), p)
 
 
+@app.post("/api/shots/dialogue")
+def set_dialogue(req: models.SetDialogueRequest):
+    """SSE — author timelined dialogue on a shot and lip-sync it into the existing clip.
+
+    Additive: the shot is already rendered, so this voices each line and mouth-edits it in at
+    its start, then re-stitches the cut. Clearing every line reverts to the clean plate.
+    """
+    p = _require(req.project_id)
+    return _sse(director.set_dialogue(p, req.shot_id, req.cues()), p)
+
+
 # ---- entity graph -----------------------------------------------------------
 
 @app.get("/api/projects/{project_id}/impact")

@@ -380,6 +380,25 @@ function Studio({ session }) {
     }
   }, [projectId, busy, handleEvent, pushMsg, loadLedger]);
 
+  // Author the timelined dialogue on a shot and lip-sync it into its existing clip. Additive
+  // like + Shot — the clip is already rendered, so this only voices + mouth-edits each line and
+  // re-stitches the cut. An empty list clears dialogue and reverts to the clean plate.
+  const setDialogue = useCallback(async (shotId, dialogue) => {
+    if (!projectId || busy) return;
+    setBusy(true);
+    try {
+      const ctrl = new AbortController();
+      abortRef.current = ctrl;
+      await api.streamSetDialogue(projectId, shotId, dialogue, handleEvent, ctrl.signal);
+      loadLedger();
+    } catch (e) {
+      if (e.name !== 'AbortError') pushMsg('error', `Dialogue sync failed: ${e.message}`);
+    } finally {
+      setBusy(false);
+      abortRef.current = null;
+    }
+  }, [projectId, busy, handleEvent, pushMsg, loadLedger]);
+
   // Let the director read the scene and propose the next setup. Costs a text call and
   // renders nothing — it fills the form in, and taking the shot is still a separate act.
   const suggestShot = useCallback(
@@ -862,6 +881,7 @@ function Studio({ session }) {
               entityNodes={entityNodes}
               onAcceptQC={acceptQC}
               onReviewQC={reviewQC}
+              onSetDialogue={setDialogue}
             />
           )}
 

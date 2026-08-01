@@ -481,6 +481,32 @@ class AddKeyframeRequest(BaseModel):
         return {"shot": self.shot, "angle": self.angle, "move": self.move, "note": self.note}
 
 
+class SetDialogueRequest(BaseModel):
+    """Author the timelined dialogue on a shot, then lip-sync it into the existing clip.
+
+    Additive over the animation: the clip is already rendered and paid for, so this voices each
+    line and mouth-edits it in at its `start`. `dialogue` replaces the shot's whole cue list —
+    an empty list clears dialogue and reverts to the clean plate. Each cue is
+    {character, text, start, voice_id?}; blank lines are dropped and `start` is clamped to ≥ 0.
+    """
+    project_id: str
+    shot_id: str
+    dialogue: list[dict] = Field(default_factory=list)
+
+    def cues(self) -> list[dict]:
+        out = []
+        for d in self.dialogue:
+            text = (d.get("text") or "").strip()
+            if not text:
+                continue
+            cue = {"character": (d.get("character") or "").strip(), "text": text,
+                   "start": max(0.0, float(d.get("start", 0.0) or 0.0))}
+            if d.get("voice_id"):
+                cue["voice_id"] = d["voice_id"]
+            out.append(cue)
+        return out
+
+
 class QCReviewRequest(BaseModel):
     """Re-review a node's current take without regenerating it.
 

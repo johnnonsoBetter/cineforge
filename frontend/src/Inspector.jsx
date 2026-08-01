@@ -4,6 +4,7 @@ import { verdictColor, needsReview } from './qc.js';
 import Takes from './Takes.jsx';
 import QCPanel from './QCPanel.jsx';
 import StoryBrief from './StoryBrief.jsx';
+import DialogueEditor from './DialogueEditor.jsx';
 
 // A scene's cast is a real dependency on character nodes, not decoration — clicking a
 // chip walks the graph to whoever it points at.
@@ -234,7 +235,7 @@ function meta(node) {
 export default function Inspector({ node, onClose, onRegenerate, busy,
                                     references, onSelectNode, onSelectEntity, onRename,
                                     onSelectVersion, sceneShots, onAcceptQC,
-                                    onReviewQC, entityNodes }) {
+                                    onReviewQC, entityNodes, onSetDialogue }) {
   const entityRefs = node?.data?.id ? (references?.[node.data.id] || []) : [];
 
   const asset = node?.asset;
@@ -252,11 +253,15 @@ export default function Inspector({ node, onClose, onRegenerate, busy,
   const hasCoverage = node?.kind === 'scene' && (node?.data?.coverage?.length || 0) > 0;
   const hasUses = isEntity && entityRefs.length > 0;
   const hasBrief = node?.kind === 'story';
+  // A shot's clip can carry timelined, lip-synced lines — but only once the clip exists to
+  // sync them onto, so the tab appears with the rendered take.
+  const hasDialogue = node?.kind === 'shot' && !!node?.asset?.url;
   // Details keeps the node's own fields and (for entities) rename — the blast radius and the
   // regenerate/lock controls now live on the conversational rail, next to the input.
   const hasDetails = rows.length > 0 || isEntity;
   const tabs = [
     hasReview && { id: 'review', label: 'Review' },
+    hasDialogue && { id: 'dialogue', label: 'Dialogue' },
     hasHistory && { id: 'history', label: 'History' },
     hasDetails && { id: 'details', label: 'Details' },
     hasCast && { id: 'cast', label: 'Cast' },
@@ -336,6 +341,10 @@ export default function Inspector({ node, onClose, onRegenerate, busy,
             onReview={onReviewQC}
             onCompareVersion={compareTake}
           />
+        )}
+
+        {active === 'dialogue' && (
+          <DialogueEditor node={node} onSetDialogue={onSetDialogue} busy={busy} />
         )}
 
         {active === 'history' && (

@@ -267,6 +267,17 @@ export function streamAddKeyframe(projectId, sceneId, spec, onEvent, signal) {
   }, onEvent, signal);
 }
 
+// Author the timelined dialogue on a shot and lip-sync it into the existing clip. Additive —
+// the clip is already rendered, so this only voices + mouth-edits each line and re-stitches the
+// cut. `dialogue` is the shot's whole cue list ([{character, text, start, voice_id?}]); an empty
+// list clears it and reverts to the clean plate.
+export function streamSetDialogue(projectId, shotId, dialogue, onEvent, signal) {
+  return streamSSE('/api/shots/dialogue', {
+    method: 'POST',
+    body: { project_id: projectId, shot_id: shotId, dialogue: dialogue || [] },
+  }, onEvent, signal);
+}
+
 export function streamEdit(projectId, instruction, targetNodeId, onEvent, signal) {
   return streamSSE('/api/edit', {
     method: 'POST',

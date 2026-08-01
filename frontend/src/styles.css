@@ -927,6 +927,82 @@ button.node-play:hover { background: rgba(20, 16, 12, 0.92); }
   color: var(--faint);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
+/* A shot that speaks: the lip-synced line count, flagged on the card so the cut is scannable. */
+.shot-dialogue {
+  font-family: var(--mono);
+  font-size: 9.5px; letter-spacing: 0.05em;
+  color: var(--gold-dim);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* ---- dialogue editor (Inspector) --------------------------------------- */
+.dlg-track {
+  position: relative;
+  height: 22px; margin: 2px 0 14px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: linear-gradient(var(--surface), var(--surface-2));
+}
+.dlg-tick {
+  position: absolute; top: -2px; bottom: -2px; width: 2px;
+  margin-left: -1px;
+  background: var(--gold);
+  box-shadow: 0 0 6px rgba(228, 165, 85, 0.55);
+}
+.dlg-track-end {
+  position: absolute; right: 5px; top: 50%; transform: translateY(-50%);
+  font-size: 9px; color: var(--faint);
+}
+.dlg-rows { display: flex; flex-direction: column; gap: 10px; }
+.dlg-row {
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 8px 9px 9px;
+  background: var(--surface);
+}
+.dlg-row-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.dlg-who {
+  flex: 1; min-width: 0;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 5px 8px;
+  color: var(--text); font-size: 12.5px;
+}
+.dlg-who:focus { outline: none; border-color: var(--line-strong); }
+.dlg-at { display: inline-flex; align-items: center; gap: 4px; color: var(--faint); }
+.dlg-at input {
+  width: 46px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 4px 6px;
+  color: var(--text); font-family: var(--mono); font-size: 11px;
+}
+.dlg-at input:focus { outline: none; border-color: var(--line-strong); }
+.dlg-del {
+  flex: none;
+  width: 24px; height: 24px;
+  background: none; border: 1px solid var(--line); border-radius: 5px;
+  color: var(--faint); cursor: pointer;
+}
+.dlg-del:hover:not(:disabled) { color: var(--gold); border-color: var(--line-strong); }
+.dlg-add {
+  margin: 10px 0 4px;
+  width: 100%;
+  background: none;
+  border: 1px dashed var(--line-strong);
+  border-radius: 6px;
+  padding: 7px;
+  color: var(--gold-dim); font-family: var(--mono); font-size: 11px; letter-spacing: 0.06em;
+  cursor: pointer;
+}
+.dlg-add:hover:not(:disabled) { color: var(--gold); background: var(--gold-soft); }
+.dlg-foot {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  margin-top: 12px; padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
 
 .node-body { padding: 11px 12px 13px; }
 .node-title { font-family: var(--serif); font-size: 15.5px; line-height: 1.3; color: var(--cream); }

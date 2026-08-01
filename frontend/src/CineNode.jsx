@@ -101,6 +101,15 @@ function CineNodeImpl({ data, selected }) {
             )}
           </div>
           {d.setup && <span className="shot-setup">{d.setup}</span>}
+          {/* Timelined, lip-synced lines live on the clip — flag them on the card so a director
+              scanning the cut sees which shots speak, and to whom, without opening the shot. */}
+          {d.dialogue?.length > 0 && (
+            <span className="shot-dialogue"
+                  title={d.dialogue.map((c) => `${c.start ?? 0}s — ${c.character ? `${c.character}: ` : ''}${c.text}`).join('\n')}>
+              💬 {d.dialogue.length} line{d.dialogue.length === 1 ? '' : 's'}
+              {d.dialogue[0]?.character ? ` · ${d.dialogue[0].character}` : ''}
+            </span>
+          )}
         </div>
         <Handle type="source" position={Position.Right} />
       </div>

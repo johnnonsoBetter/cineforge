@@ -119,6 +119,30 @@ def _mock_clip(image_url: str, seed: str, duration: int,
         a.unlink(missing_ok=True)
 
 
+def _local_path(url: str | None):
+    """Disk path for a locally-served mock asset, else None. Mock clips and audio come back as
+    /api/media/<name> and live in _MOCK_DIR; the ffmpeg mock reads the file, not the URL."""
+    if url and url.startswith("/api/media/"):
+        return _MOCK_DIR / url.rsplit("/", 1)[-1]
+    return None
+
+
+def _probe_duration(path) -> float | None:
+    """Measured length of a media file in seconds, or None if ffprobe can't read it."""
+    import shutil
+    import subprocess
+    if not path or not shutil.which("ffprobe"):
+        return None
+    try:
+        out = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=nokey=1:noprint_wrappers=1", str(path)],
+            capture_output=True, text=True, timeout=30)
+        return round(float(out.stdout.strip()), 3)
+    except Exception:
+        return None
+
+
 @dataclass
 class GenResult:
     url: str
@@ -298,10 +322,16 @@ def image_to_video(image_url: str, prompt: str, *, duration: int = 8,
 
 
 def tts(text: str, *, voice_id: str = "JBFqnCBsd6RMkjVDRZzb") -> GenResult:
-    """Narration / dialogue via ElevenLabs (fallback path)."""
+    """Narration / dialogue via ElevenLabs — returns the clip AND its measured length.
+
+    The duration is load-bearing for lip-sync: a line is placed at an offset inside the shot
+    and synced over ``[start, start+duration]``, so a bare URL isn't enough. The mock returns a
+    real (tone) file of a plausible length rather than a ``mock://`` sentinel, so timelined
+    dialogue is demonstrable offline the same way ``_mock_clip`` demos coverage.
+    """
     if cfg.mock_media() or not cfg.ELEVENLABS_API_KEY:
-        time.sleep(0.1)
-        return GenResult(url="mock://audio.mp3",
+        url, dur = _mock_tts(text)
+        return GenResult(url=url, duration_sec=dur,
                          provenance=mock_provenance("elevenlabs", cfg.TTS_MODEL, text))
     from genblaze_core import Pipeline, Modality
     from genblaze_elevenlabs import ElevenLabsTTSProvider
@@ -312,7 +342,131 @@ def tts(text: str, *, voice_id: str = "JBFqnCBsd6RMkjVDRZzb") -> GenResult:
     asset = result.run.steps[-1].assets[0]
     prov = summarize_manifest(result.manifest, text)
     prov.provider, prov.model = "elevenlabs", cfg.TTS_MODEL
-    return GenResult(url=asset.url, provenance=prov)
+    return GenResult(url=asset.url, duration_sec=getattr(asset, "duration_sec", None),
+                     provenance=prov)
+
+
+def _mock_tts(text: str) -> tuple[str, float]:
+    """A cached sine-tone stand-in whose length tracks the line (~2.6 words/sec speech).
+
+    Not a voice — just a real, correctly-sized audio file so the dialogue mock can place
+    something audible at its start offset and exercise the true playback/export path. Falls
+    back to the ``mock://`` sentinel (no placement) only when ffmpeg is absent.
+    """
+    import hashlib
+    import shutil
+    import subprocess
+    dur = round(max(0.8, len(text.split()) / 2.6), 2)
+    if not shutil.which("ffmpeg"):
+        return "mock://audio.mp3", dur
+    _MOCK_DIR.mkdir(parents=True, exist_ok=True)
+    name = hashlib.sha256(f"tts|{text}".encode()).hexdigest()[:16] + ".m4a"
+    out = _MOCK_DIR / name
+    if not (out.exists() and out.stat().st_size > 0):
+        subprocess.run(["ffmpeg", "-y", "-f", "lavfi", "-i",
+                        f"sine=frequency=200:duration={dur}", "-c:a", "aac", str(out)],
+                       capture_output=True, timeout=60)
+    return f"/api/media/{name}", dur
+
+
+def lipsync(clip_url: str, audio_url: str, *, start: float = 0.0,
+            duration: float | None = None, parent_run_id: str | None = None) -> GenResult:
+    """Sync a character's mouth to a line, over one window of an already-rendered clip.
+
+    Approach B (layer-after-i2v): the seedance clip keeps its camera move; this pass drives the
+    mouth from the dialogue audio placed at ``start``, so the line "plugs in at that spot"
+    rather than replacing the whole render. Returns a new clip URL of the same length.
+    """
+    if cfg.mock_media():
+        # The mock can't move lips — and shouldn't pretend to. What it proves is the timing
+        # contract: mux the line onto the clip at `start`, clip length preserved, so the
+        # timeline, cinema mode and export all exercise the real playback path.
+        url = _mock_lipsync(clip_url, audio_url, start)
+        return GenResult(
+            url=url or clip_url, thumbnail=clip_url,
+            duration_sec=_probe_duration(_local_path(clip_url)),
+            provenance=mock_provenance(cfg.PROVIDER_STACK, "sync-mock",
+                                       f"lipsync @{start:.2f}s", parent_run_id))
+
+    # Real path: Sync.so drives the mouth for the whole clip against the audio it's given.
+    # Placement at `start` is the mock's job today; in real mode the caller passes an audio
+    # track already positioned in the shot's window (see _sync_dialogue). Verify the model slug
+    # and request/response shape against docs.sync.so before a paid run.
+    if not cfg.SYNC_API_KEY:
+        raise RuntimeError("lipsync: SYNC_API_KEY is not set")
+    out_url, job_id = _sync_generate(clip_url, audio_url)
+    prov = Provenance(provider="sync.so", model=cfg.LIPSYNC_MODEL,
+                      prompt=f"lipsync @{start:.2f}s", run_id=job_id,
+                      parent_run_id=parent_run_id)
+    return GenResult(url=out_url, thumbnail=clip_url, duration_sec=duration, provenance=prov)
+
+
+def _mock_lipsync(clip_url: str, audio_url: str, start: float) -> str | None:
+    """Mux the dialogue onto the silent clip at `start`, clip length unchanged. Cached like
+    _mock_clip. Returns a served URL, or None if ffmpeg/inputs are unavailable."""
+    import hashlib
+    import shutil
+    import subprocess
+    clip, audio = _local_path(clip_url), _local_path(audio_url)
+    if not shutil.which("ffmpeg") or not (clip and clip.exists()) or not (audio and audio.exists()):
+        return None
+    _MOCK_DIR.mkdir(parents=True, exist_ok=True)
+    name = hashlib.sha256(f"ls|{clip_url}|{audio_url}|{start}".encode()).hexdigest()[:16] + ".mp4"
+    out = _MOCK_DIR / name
+    if out.exists() and out.stat().st_size > 0:
+        return f"/api/media/{name}"
+    dur = _probe_duration(clip) or 8.0
+    delay = int(max(0.0, start) * 1000)
+    # Video untouched; the line is delayed to `start`, then mixed under the clip's own (silent)
+    # track so the muxer keeps one stereo stream. Trim back to the clip's length.
+    args = ["ffmpeg", "-y", "-i", str(clip), "-i", str(audio),
+            "-filter_complex",
+            f"[1:a]adelay={delay}|{delay}[d];[0:a][d]amix=inputs=2:duration=first[a]",
+            "-map", "0:v", "-map", "[a]", "-t", str(dur),
+            "-c:v", "copy", "-c:a", "aac", str(out)]
+    proc = subprocess.run(args, capture_output=True, text=True, timeout=180)
+    return f"/api/media/{name}" if proc.returncode == 0 and out.exists() else None
+
+
+def _sync_generate(clip_url: str, audio_url: str) -> tuple[str, str]:
+    """Submit a Sync.so lip-sync job and poll to completion. Returns (output_url, job_id).
+
+    Sync.so authenticates with `x-api-key` (not Bearer) and returns a job to poll, so it can't
+    reuse `_post_json`. Model slug and field names must be verified against docs.sync.so — a
+    dead slug fails the whole pass, same as the GMICloud queue slugs.
+    """
+    import os
+    base = os.getenv("SYNC_BASE_URL", "https://api.sync.so/v2")
+    payload = {"model": cfg.LIPSYNC_MODEL,
+               "input": [{"type": "video", "url": clip_url},
+                         {"type": "audio", "url": audio_url}],
+               "options": {"sync_mode": "cut_off"}}
+    job = _sync_request("POST", f"{base}/generate", payload)
+    job_id = job.get("id")
+    if not job_id:
+        raise RuntimeError(f"sync.so: no job id in response ({job})")
+    for _ in range(120):  # up to ~10 min at 5s
+        time.sleep(5)
+        st = _sync_request("GET", f"{base}/generate/{job_id}")
+        status = st.get("status")
+        if status == "COMPLETED":
+            url = st.get("outputUrl") or st.get("output_url")
+            if not url:
+                raise RuntimeError(f"sync.so job {job_id} completed without an output url")
+            return url, job_id
+        if status in ("FAILED", "CANCELED", "REJECTED", "TIMED_OUT"):
+            raise RuntimeError(f"sync.so job {job_id} {status}: {st.get('error')}")
+    raise RuntimeError(f"sync.so job {job_id} did not finish in time")
+
+
+def _sync_request(method: str, url: str, payload: dict | None = None, timeout: int = 90) -> dict:
+    data = json.dumps(payload).encode() if payload is not None else None
+    req = urllib.request.Request(
+        url, data=data, method=method,
+        headers={"Content-Type": "application/json", "x-api-key": cfg.SYNC_API_KEY,
+                 "User-Agent": "cineforge/1.0"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read().decode())
 
 
 def _post_json(url: str, payload: dict, api_key: str, timeout: int = 90) -> dict:

@@ -46,6 +46,7 @@ class Config:
     GMI_API_KEY = os.getenv("GMI_API_KEY")
     ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
     OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+    SYNC_API_KEY = os.getenv("SYNC_API_KEY")  # Sync.so lip-sync (x-api-key auth)
 
     # Model defaults (overridable). See genblaze provider matrix.
     # Model slugs are the GMICloud request-queue catalog (console.gmicloud.ai/.../requestqueue),
@@ -56,6 +57,12 @@ class Config:
     IMAGE_MODEL = os.getenv("IMAGE_MODEL", "seedream-5.0-lite")
     I2V_MODEL = os.getenv("I2V_MODEL", "seedance-1-0-pro-250528")
     TTS_MODEL = os.getenv("TTS_MODEL", "eleven_v3")
+    # Lip-sync (Sync.so) — a windowed mouth-edit over an already-rendered clip, so a shot
+    # keeps its seedance camera move and only the mouth is driven by the dialogue audio. This
+    # is Sync.so's own REST API (api.sync.so/v2), not a GMICloud queue slug: verify the model
+    # id and request/response shape against docs.sync.so before a paid run — a wrong slug fails
+    # the whole lip-sync pass, same caution as the image/video queue slugs above.
+    LIPSYNC_MODEL = os.getenv("LIPSYNC_MODEL", "lipsync-2.0.0")
     CHAT_MODEL = os.getenv("CHAT_MODEL", "gpt-4o")
     # GMICloud namespaces its model ids ("anthropic/claude-sonnet-4.5"); the bare OpenAI
     # slugs the OpenAI stack uses 404 there, so the GMI planner model is its own setting.

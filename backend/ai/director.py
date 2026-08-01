@@ -376,6 +376,108 @@ def _add_vo(project: Project, shot: Node, line: str) -> Iterator[StageEvent]:
     yield from ()
 
 
+def _dialogue_of(shot: Node) -> list[dict]:
+    """Timelined lines on this shot — [{character, text, start, voice_id?}, ...], in time order.
+
+    Distinct from `vo`: a `vo` is narration laid over the whole clip, a dialogue line is a
+    spoken beat placed at an offset inside the shot and lip-synced to the character's mouth.
+    """
+    return sorted(shot.data.get("dialogue") or [], key=lambda d: float(d.get("start", 0.0)))
+
+
+def _sync_dialogue(project: Project, shot: Node) -> Iterator[StageEvent]:
+    """Voice each line and lip-sync it into the shot's clip at its `start` (approach B).
+
+    Layered after the animation: the clip keeps its seedance camera move; each line is a
+    windowed mouth-edit chained onto the previous result. Isolated like `_add_vo` — a line that
+    fails is skipped and the clip (and any earlier synced lines) still stands. The synced take
+    is recorded as a new version, so the clean plate is one click away in the version picker.
+
+    Real note: in real mode every line is an independent Sync.so pass, so a second line
+    re-drives the mouth for the whole clip; v1 real is faithful for one line per shot. Multi-
+    line real needs a single combined audio bed — the documented follow-up.
+    """
+    lines = _dialogue_of(shot)
+    if not (shot.asset and shot.asset.url):
+        return
+    # Always sync from the clean animation plate, never from an already-synced take, so
+    # re-authoring dialogue re-drives the mouth from scratch instead of stacking audio on
+    # audio. The plate is captured the first time this runs and reused on every later edit.
+    base_url = shot.data.get("clip_base") or shot.asset.url
+    base_run = (shot.data.get("clip_base_run")
+                or (shot.asset.provenance.run_id if shot.asset.provenance else None))
+    shot.data["clip_base"], shot.data["clip_base_run"] = base_url, base_run
+    if not lines:
+        # Dialogue cleared — if a synced take is showing, drop back to the clean plate.
+        if shot.asset.url != base_url:
+            shot.push_version(
+                Asset(kind=NodeKind.SHOT, url=base_url, thumbnail=shot.asset.thumbnail,
+                      duration_sec=shot.asset.duration_sec,
+                      provenance=models.Provenance(run_id=base_run)),
+                note="dialogue cleared")
+            yield _ev(type="node", node=shot, project_id=project.project_id)
+        return
+    names = project.entity_names()
+    clip_url = base_url
+    run = base_run
+    synced = None
+    for ln in lines:
+        text = (ln.get("text") or "").strip()
+        if not text:
+            continue
+        try:
+            voice = gb.tts(entities.resolve(text, names),
+                           voice_id=ln.get("voice_id") or "JBFqnCBsd6RMkjVDRZzb")
+            if not voice.url or voice.url.startswith("mock://"):
+                continue  # no real audio (no ffmpeg / no key) — nothing to sync, clip stands
+            length = voice.duration_sec or 0.0
+            # Keep the whole line inside the 8s shot: a long line is pushed earlier, never past
+            # the end. (Clamp, not stretch — SHOT_SECONDS stays fixed and _assemble is untouched.)
+            start = min(float(ln.get("start", 0.0)), max(0.0, SHOT_SECONDS - length))
+            synced = gb.lipsync(clip_url, voice.url, start=start,
+                                duration=length, parent_run_id=run)
+        except Exception:
+            continue  # this line drops; earlier lines and the base clip survive
+        clip_url = synced.url
+        run = synced.provenance.run_id if synced.provenance else None
+    if synced is None:
+        return
+    shot.push_version(
+        Asset(kind=NodeKind.SHOT, url=clip_url, thumbnail=shot.asset.thumbnail,
+              duration_sec=shot.asset.duration_sec, provenance=synced.provenance),
+        note="dialogue lip-synced")
+    yield _ev(type="node", node=shot, project_id=project.project_id)
+
+
+def set_dialogue(project: Project, shot_id: str, cues: list[dict]) -> Iterator[StageEvent]:
+    """Author the timelined dialogue on one shot, then lip-sync it into the existing clip.
+
+    Layered on the finished animation (approach B), so there is no re-render: this voices each
+    line and mouth-edits it in at its `start`, costing the voice and the sync per line and
+    nothing else. `cues` replaces the shot's whole cue list — an empty list clears dialogue and
+    drops back to the clean plate. The final cut re-stitches because this shot's clip changed;
+    nothing else in the film is touched.
+    """
+    pid = project.project_id
+    shot = project.get(shot_id)
+    if not shot or shot.kind != NodeKind.SHOT:
+        yield _ev(type="error", label="Dialogue attaches to a shot — pick one first.", project_id=pid)
+        return
+    if not (shot.asset and shot.asset.url):
+        yield _ev(type="error", project_id=pid,
+                  label="This shot hasn't rendered yet — there's no clip to sync onto.")
+        return
+    shot.data["dialogue"] = cues
+    n = len(cues)
+    yield _ev(project_id=pid, label=(f"Syncing {n} line{'s' if n != 1 else ''} into {shot.title}…"
+                                     if n else f"Clearing dialogue from {shot.title}…"))
+    yield from _sync_dialogue(project, shot)
+    yield from _assemble(project)
+    yield _ev(type="done", project_id=pid,
+              label=(f"{shot.title}: {n} line{'s' if n != 1 else ''} lip-synced."
+                     if n else f"{shot.title}: dialogue cleared."))
+
+
 # ---- the stages ------------------------------------------------------------
 #
 # The film is not built in one sweep. It is built in four passes, each of which is a thing a
@@ -634,8 +736,8 @@ def stage_video(project: Project) -> Iterator[StageEvent]:
         shot = project.add(Node(
             kind=NodeKind.SHOT, title=f"Shot {n}" + (f".{i + 1}" if multi else ""),
             status=NodeStatus.RUNNING, parent_ids=[kf.node_id],
-            data={"vo": scene.get("vo", ""), "n": n, "i": i,
-                  "setup": kf.data.get("setup", ""), "coverage": unit,
+            data={"vo": scene.get("vo", ""), "dialogue": scene.get("dialogue", []),
+                  "n": n, "i": i, "setup": kf.data.get("setup", ""), "coverage": unit,
                   "prompt": unit.get("video_prompt", "")}))
         yield _ev(type="node", node=shot, project_id=pid)
         prompt = _prompt_of(project, shot)
@@ -658,8 +760,12 @@ def stage_video(project: Project) -> Iterator[StageEvent]:
     # occupies a scarce video worker slot or delays another clip from being submitted.
     for shot, line in voiced:
         if shot.status != NodeStatus.FAILED:
-            yield from _add_vo(project, shot, line)
-            yield _ev(type="node", node=shot, project_id=pid)
+            # Timelined dialogue is lip-synced into the clip; a plain scene VO is laid over it.
+            if _dialogue_of(shot):
+                yield from _sync_dialogue(project, shot)
+            else:
+                yield from _add_vo(project, shot, line)
+                yield _ev(type="node", node=shot, project_id=pid)
 
     yield from _assemble(project)
 
@@ -1052,6 +1158,17 @@ def _regen(project: Project, node_id: str, note: str | None = None, skip=None) -
         for shot in project.children_of(node.node_id):
             if shot.kind == NodeKind.SHOT and shot.node_id not in skip:
                 yield from _regen(project, shot.node_id, note, skip)
+    elif node.kind in (NodeKind.CHARACTER, NodeKind.ENVIRONMENT):
+        # Consistency first: a new sheet or plate is a new look, and every frame built on it
+        # would otherwise keep the old one. Re-roll each downstream keyframe in place — it
+        # re-reads the fresh sheets (_sheet_refs) and cascades into its own shots — so the
+        # change reaches the whole film in this one pass, exactly as the regen panel promises.
+        # Skipped or locked frames are left as they are (a keyframe regen honours both). The
+        # note already rewrote this asset's own prompt; downstream re-renders off the new pixels,
+        # so it is not pushed further and can't double-apply.
+        for kf in _descendants_of(project, node):
+            if kf.kind == NodeKind.KEYFRAME and kf.node_id not in skip:
+                yield from _regen(project, kf.node_id, None, skip)
     else:
         yield from _mark_downstream_stale(project, node, skip)
 
@@ -1070,9 +1187,11 @@ def regenerate_node(project: Project, node_id: str, note: str | None = None,
     skip = skip or ()
     yield from _regen(project, node_id, note, skip)
     # The final cut is downstream of every clip, so any regen that re-rendered shots (a shot, a
-    # keyframe cascading into its shots, or a scene) leaves it stale. Re-stitch it here so the
-    # film reflects the change at once — unless the director kept the Final Film this pass.
-    if node and node.kind in (NodeKind.SHOT, NodeKind.KEYFRAME, NodeKind.SCENE):
+    # keyframe cascading into its shots, a scene, or a sheet/plate cascading through its frames)
+    # leaves it stale. Re-stitch it here so the film reflects the change at once — unless the
+    # director kept the Final Film this pass.
+    if node and node.kind in (NodeKind.SHOT, NodeKind.KEYFRAME, NodeKind.SCENE,
+                              NodeKind.CHARACTER, NodeKind.ENVIRONMENT):
         timeline = next((n for n in project.by_kind(NodeKind.TIMELINE)), None)
         if timeline and timeline.node_id not in skip:
             yield from _assemble(project)
