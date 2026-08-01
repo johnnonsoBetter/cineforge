@@ -220,6 +220,32 @@ export async function exportFilm(projectId) {
   return body;
 }
 
+// --- bring-your-own Genblaze key ---------------------------------------------
+// A caller who hits the shared preview's credit wall can store their own GMICloud key so
+// their renders run for real on their own credits. The backend holds it encrypted, per
+// account; we only ever send it up or read back whether one is on file (never the key).
+
+export async function getKeyStatus() {
+  const r = await fetch('/api/account/key', { headers: authHeader() });
+  if (!r.ok) return { has_key: false, masked: null };
+  return r.json(); // { has_key, masked }
+}
+
+export async function setGenblazeKey(key) {
+  const r = await fetch('/api/account/key', {
+    method: 'POST', headers: jsonHeaders(), body: JSON.stringify({ key }),
+  });
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(body.detail || 'could not save that key');
+  return body; // { ok, has_key, masked }
+}
+
+export async function clearGenblazeKey() {
+  const r = await fetch('/api/account/key', { method: 'DELETE', headers: authHeader() });
+  if (!r.ok) throw new Error('could not remove that key');
+  return r.json();
+}
+
 export function streamRegenerate(projectId, nodeId, note, skip, onEvent, signal) {
   return streamSSE('/api/regenerate', {
     method: 'POST',

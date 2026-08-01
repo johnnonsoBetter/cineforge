@@ -16,6 +16,7 @@ import Inspector from './Inspector.jsx';
 import Timeline from './Timeline.jsx';
 import ContextMenu from './ContextMenu.jsx';
 import ShotDialog from './ShotDialog.jsx';
+import KeyDialog from './KeyDialog.jsx';
 import QCGate from './QCGate.jsx';
 import Login from './Login.jsx';
 import Landing from './Landing.jsx';
@@ -60,6 +61,8 @@ function Studio({ session }) {
   const [shotAt, setShotAt] = useState(null);         // { node, mode } — new-setup modal
   const [library, setLibrary] = useState([]);         // the caller's films, for the empty-state picker
   const [visibility, setVis] = useState('private');   // 'private' | 'public' — the open film's share state
+  const [keyStatus, setKeyStatus] = useState({ has_key: false, masked: null }); // own Genblaze key on file?
+  const [keyDialog, setKeyDialog] = useState(null);   // null | { reason: 'manual' | 'wall' }
 
   const abortRef = useRef(null);
   const proposalRequestRef = useRef(false);
@@ -150,7 +153,12 @@ function Studio({ session }) {
       pushMsg('qc', ev.label || qcHeadline(ev.qc));
     }
     else if (ev.type === 'done' && ev.label) pushMsg('done', ev.label);
-    else if (ev.type === 'error' && ev.label) pushMsg('error', ev.label);
+    else if (ev.type === 'error' && ev.label) {
+      pushMsg('error', ev.label);
+      // The shared preview ran out of credits mid-run. Offer the bring-your-own-key path
+      // instead of leaving a wall of failed cards with no way forward.
+      if (ev.code === 'credit_exhausted') setKeyDialog({ reason: 'wall' });
+    }
   }, [upsertNode, pushMsg, patchStage, clearPhase]);
 
   const fitSoon = useCallback(() => {
@@ -275,6 +283,12 @@ function Studio({ session }) {
     if (projectId) return;
     api.getLibrary().then((r) => setLibrary(r.projects || [])).catch(() => setLibrary([]));
   }, [projectId]);
+
+  // Whether this caller already has their own Genblaze key on file — drives the toolbar
+  // affordance and lets the credit-wall prompt know if it's a first key or a replacement.
+  useEffect(() => {
+    api.getKeyStatus().then(setKeyStatus).catch(() => {});
+  }, []);
 
   // ---- open a gate, and let the next stage start ----
   const approveStage = useCallback(async (key, note) => {
@@ -731,6 +745,15 @@ function Studio({ session }) {
               )}
             </>
           )}
+          <button
+            className={`btn key-btn ${keyStatus.has_key ? 'on' : ''}`}
+            onClick={() => setKeyDialog({ reason: 'manual' })}
+            title={keyStatus.has_key
+              ? `Your Genblaze key is on file (${keyStatus.masked}) — renders use your credits`
+              : 'Add your own Genblaze key to render on your own credits'}
+          >
+            {keyStatus.has_key ? '🔑 Your key' : '🔑 Use your key'}
+          </button>
           <button className="btn" onClick={reset}>New</button>
           {authEnabled && (
             <button
@@ -916,6 +939,26 @@ function Studio({ session }) {
               onClose={() => setShotAt(null)}
               onSubmit={shotAt.mode === 'keyframe' ? addKeyframe : addShot}
               onSuggest={suggestShot}
+            />
+          )}
+
+          {keyDialog && (
+            <KeyDialog
+              reason={keyDialog.reason}
+              status={keyStatus}
+              onClose={() => setKeyDialog(null)}
+              onSaved={(res) => {
+                setKeyStatus(res);
+                const wasWall = keyDialog.reason === 'wall';
+                setKeyDialog(null);
+                if (res.has_key) {
+                  pushMsg('director', wasWall
+                    ? "Your key's in. Pick up any failed shot from its ↻ menu and it'll render on your credits — or forge a new film."
+                    : 'Your key is set. New renders now run for real on your own credits.');
+                } else {
+                  pushMsg('director', 'Key removed — renders fall back to the shared preview.');
+                }
+              }}
             />
           )}
         </div>

@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from . import auth, models
 from .ai import director, entities, gate, qc
 from .config import get_config
-from .pipeline import export, storage
+from .pipeline import export, keyvault, storage
 
 cfg = get_config()
 app = FastAPI(title="CineForge", version="0.2.0")
@@ -129,6 +129,31 @@ def health():
         "media_live": not cfg.mock_media(),
         "storage": "b2" if cfg.has_b2() else "local",
     }
+
+
+@app.get("/api/account/key")
+def get_account_key():
+    """Whether the caller has their own Genblaze key on file — never the key itself."""
+    uid = auth.current_user().id
+    return {"has_key": keyvault.has_key(uid), "masked": keyvault.masked(uid)}
+
+
+@app.post("/api/account/key")
+def set_account_key(req: models.SetKeyRequest):
+    """Store the caller's own Genblaze (GMICloud) key. From now on their renders run for real
+    on their own credits, past the shared preview's limit."""
+    try:
+        keyvault.set_key(auth.current_user().id, req.key)
+    except ValueError:
+        raise HTTPException(400, "key is empty")
+    return {"ok": True, "has_key": True, "masked": keyvault.masked(auth.current_user().id)}
+
+
+@app.delete("/api/account/key")
+def delete_account_key():
+    """Forget the caller's stored key — their renders fall back to the shared preview again."""
+    keyvault.clear_key(auth.current_user().id)
+    return {"ok": True, "has_key": False}
 
 
 @app.post("/api/projects")

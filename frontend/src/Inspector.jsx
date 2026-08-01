@@ -5,6 +5,7 @@ import Takes from './Takes.jsx';
 import QCPanel from './QCPanel.jsx';
 import StoryBrief from './StoryBrief.jsx';
 import DialogueEditor from './DialogueEditor.jsx';
+import TvPlayer from './components/TvPlayer.jsx';
 
 // A scene's cast is a real dependency on character nodes, not decoration — clicking a
 // chip walks the graph to whoever it points at.
@@ -301,7 +302,7 @@ export default function Inspector({ node, onClose, onRegenerate, busy,
       {url && (
         <div className="insp-preview">
           {video ? (
-            <video src={url} poster={asset.thumbnail} controls playsInline preload="metadata" />
+            <TvPlayer src={url} poster={asset.thumbnail} title={node.title} variant="slim" />
           ) : (
             <img src={url} alt={node.title} />
           )}

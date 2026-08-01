@@ -18,6 +18,60 @@ from .provenance import summarize_manifest, mock_provenance
 
 cfg = get_config()
 
+
+# ---- per-account key (bring-your-own Genblaze key) ------------------------
+#
+# The hosted demo runs on a shared, credit-capped key. When a caller has stored their own
+# GMICloud key (see keyvault), it overrides the host key *and* flips media to real for that
+# caller — so hitting the shared credit wall becomes "add your key and keep going" rather than
+# a dead end. With no user key, every path below behaves exactly as it did: host key or mock.
+
+def _user_key() -> str | None:
+    """The current caller's own GMICloud key, or None. Resolved off the request identity, so it
+    rides the auth contextvar the fan-out copies into its render threads (director._fanout)."""
+    try:
+        from .. import auth
+        from . import keyvault
+        return keyvault.get_key(auth.current_user().id)
+    except Exception:
+        return None
+
+
+def _active_key() -> str | None:
+    """The GMICloud key to bill this render to: the caller's own if present, else the host's."""
+    return _user_key() or cfg.GMI_API_KEY
+
+
+def _mock_media() -> bool:
+    """Media is mocked unless the host turned it on OR the caller brought their own key."""
+    return cfg.mock_media() and not _user_key()
+
+
+def _mock_text() -> bool:
+    """Text goes live on any usable key — the host's, or the caller's own."""
+    return cfg.mock_text() and not _user_key()
+
+
+# HTTP statuses and message fragments a provider uses to say "you're out of credits / over
+# quota". Kept broad on purpose: the point is to route the caller to the bring-your-own-key
+# prompt rather than show a generic failure, and a false positive there is cheap.
+_CREDIT_STATUSES = {402, 429}
+_CREDIT_PHRASES = ("insufficient", "credit", "quota", "billing", "balance",
+                   "payment required", "out of funds", "exceeded your", "rate limit")
+
+
+def is_credit_error(exc: BaseException) -> bool:
+    """Whether an exception reads as a credit/quota wall (vs. a bad slug, timeout, outage)."""
+    status = (getattr(exc, "status", None) or getattr(exc, "status_code", None)
+              or getattr(exc, "code", None))
+    if isinstance(status, int) and status in _CREDIT_STATUSES:
+        return True
+    msg = str(exc).lower()
+    if any(str(s) in msg for s in _CREDIT_STATUSES):
+        return True
+    return any(p in msg for p in _CREDIT_PHRASES)
+
+
 # Deterministic-ish placeholder media for mock mode. Mock frames follow the project's
 # aspect ratio too — a vertical film whose stills come back 16:9 would hide exactly the
 # layout bugs the mock exists to catch.
@@ -226,7 +280,9 @@ def _image_provider():
         from genblaze_openai import DalleProvider
         return DalleProvider(), "gpt-image-1"
     from genblaze_gmicloud import GMICloudImageProvider
-    return GMICloudImageProvider(), cfg.IMAGE_MODEL
+    # api_key= overrides the GMI_API_KEY env fallback, so a caller's own key bills their
+    # account; None keeps the provider's env fallback (the host key) untouched.
+    return GMICloudImageProvider(api_key=_active_key()), cfg.IMAGE_MODEL
 
 
 def _video_provider():
@@ -234,7 +290,7 @@ def _video_provider():
         from genblaze_openai import SoraProvider
         return SoraProvider(), "sora-2"
     from genblaze_gmicloud import GMICloudVideoProvider
-    return GMICloudVideoProvider(), cfg.I2V_MODEL
+    return GMICloudVideoProvider(api_key=_active_key()), cfg.I2V_MODEL
 
 
 # ---------------- Public API used by the AI layer ----------------
@@ -249,7 +305,7 @@ def generate_image(prompt: str, *, seed: str = "x", ref_urls: list[str] | None =
     links this render to the take it was regenerated from, so the manifest carries the lineage
     (see `_chain`).
     """
-    if cfg.mock_media():
+    if _mock_media():
         time.sleep(0.2)
         model = cfg.IMAGE_MODEL if cfg.PROVIDER_STACK == "gmicloud" else "gpt-image-1"
         w, h = _ASPECT_PX.get(aspect_ratio, _ASPECT_PX["16:9"])
@@ -292,7 +348,7 @@ def image_to_video(image_url: str, prompt: str, *, duration: int = 8,
     to crop, so both paths actually differ per setup. `parent_run_id` links a re-shoot to the
     take it descends from (see `_chain`).
     """
-    if cfg.mock_media():
+    if _mock_media():
         time.sleep(0.3)
         model = cfg.I2V_MODEL if cfg.PROVIDER_STACK == "gmicloud" else "sora-2"
         url = _mock_clip(image_url, prompt[:40], duration, framing=framing, move=move)
@@ -500,7 +556,7 @@ def chat(system: str, user: str, *, json_mode: bool = False, temperature: float 
 
     Returns "" when there is no key — every caller treats that as "use your fallback".
     """
-    if cfg.mock_text():
+    if _mock_text():
         return ""  # callers supply their own mock structure
 
     prefer_openai = cfg.PROVIDER_STACK == "openai" or bool(cfg.OPENAI_API_KEY)
@@ -521,11 +577,11 @@ def chat(system: str, user: str, *, json_mode: bool = False, temperature: float 
             return oai_chat(model=model or cfg.CHAT_MODEL, system=system, prompt=user,
                             temperature=temperature, response_format=rformat,
                             max_tokens=16000, timeout=300).text
-        if cfg.GMI_API_KEY:
+        if _active_key():
             from genblaze_gmicloud import chat as gmi_chat
             return gmi_chat(model=model or cfg.GMI_CHAT_MODEL, system=system, prompt=user,
                             temperature=temperature, response_format=rformat,
-                            max_tokens=16000, timeout=300).text
+                            max_tokens=16000, timeout=300, api_key=_active_key()).text
     except ImportError:
         pass  # not installed yet — fall through to the direct wire call
 
@@ -539,9 +595,9 @@ def chat(system: str, user: str, *, json_mode: bool = False, temperature: float 
     if prefer_openai and cfg.OPENAI_API_KEY:
         base = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
         key, model = cfg.OPENAI_API_KEY, model or cfg.CHAT_MODEL
-    elif cfg.GMI_API_KEY:
+    elif _active_key():
         base = os.getenv("GMI_BASE_URL", "https://api.gmi-serving.com/v1")
-        key = cfg.GMI_API_KEY
+        key = _active_key()
         model = model or cfg.GMI_CHAT_MODEL
     else:
         return ""
@@ -579,7 +635,7 @@ def chat_stream(system: str, user: str, *, json_mode: bool = False,
     chat(). Yields nothing when there is no key, exactly as chat() returns "" — the caller
     falls back to its own path either way.
     """
-    if cfg.mock_text():
+    if _mock_text():
         return
 
     import os
@@ -587,9 +643,9 @@ def chat_stream(system: str, user: str, *, json_mode: bool = False,
     if prefer_openai and cfg.OPENAI_API_KEY:
         base = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
         key, model = cfg.OPENAI_API_KEY, model or cfg.CHAT_MODEL
-    elif cfg.GMI_API_KEY:
+    elif _active_key():
         base = os.getenv("GMI_BASE_URL", "https://api.gmi-serving.com/v1")
-        key, model = cfg.GMI_API_KEY, model or cfg.GMI_CHAT_MODEL
+        key, model = _active_key(), model or cfg.GMI_CHAT_MODEL
     else:
         return
 

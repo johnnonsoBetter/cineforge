@@ -47,10 +47,10 @@ from . import route
 cfg = get_config()
 
 
-def _ev(label=None, node=None, project_id=None, type="stage") -> StageEvent:
+def _ev(label=None, node=None, project_id=None, type="stage", code=None) -> StageEvent:
     # Nodes are stored tokenised ("{{SIMEON}} bargains…"); resolution to current entity
     # names happens once, in app.py's SSE serializer, on the way out.
-    return StageEvent(type=type, label=label, node=node, project_id=project_id)
+    return StageEvent(type=type, label=label, node=node, project_id=project_id, code=code)
 
 
 def _progress(stage: str, done: int, total: int, project_id: str) -> StageEvent:
@@ -273,11 +273,13 @@ def _fanout(work: list["_Unit"], *, stage: str, done: int, total: int,
     back — and the monitor still ticks once per unit. A unit that raises carries its failure
     onto its node and the run continues, the same contract `_safe` gives the serial passes.
     """
+    import contextvars
     from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
     from queue import SimpleQueue
     if not work:
         return
     progress_events = SimpleQueue()
+    wall_signalled = False  # emit the bring-your-own-key nudge at most once per pass
     workers = concurrency if concurrency is not None else cfg.GEN_CONCURRENCY
     with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
         futures = {}
@@ -285,7 +287,11 @@ def _fanout(work: list["_Unit"], *, stage: str, done: int, total: int,
             callback = None
             if provider_progress:
                 callback = lambda event, node_id=u.node.node_id: progress_events.put((node_id, event))
-            future = pool.submit(_render_gated, u.node.kind, u.generate, u.target,
+            # Render on a worker thread, but under a copy of *this* request's context, so the
+            # caller's identity (and thus their own Genblaze key) reaches the provider call —
+            # a bare ThreadPoolExecutor thread would fall back to the default `local` user.
+            ctx = contextvars.copy_context()
+            future = pool.submit(ctx.run, _render_gated, u.node.kind, u.generate, u.target,
                                  u.budget, u.parent, callback)
             futures[future] = u
 
@@ -306,6 +312,14 @@ def _fanout(work: list["_Unit"], *, stage: str, done: int, total: int,
                 except Exception as e:
                     node.status = NodeStatus.FAILED
                     node.qc = qc_agent.error_report(u.what, e)
+                    # A paid render that failed on credits/quota isn't a generic error — it's
+                    # the "trial pool is spent" wall. Surface it once so the canvas can offer
+                    # the caller their own-key path instead of a dead card.
+                    if gb.is_credit_error(e) and not wall_signalled:
+                        wall_signalled = True
+                        yield _ev(type="error", code="credit_exhausted", project_id=project_id,
+                                  label="The shared preview is out of generation credits. "
+                                        "Add your own Genblaze key to keep rendering.")
                 else:
                     node.asset = asset
                     _settle(node, asset, report, attempt)

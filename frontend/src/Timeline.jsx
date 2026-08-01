@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
-import { isVideo } from './ui.js';
+import { useEffect, useState } from 'react';
+import TvPlayer from './components/TvPlayer.jsx';
 
 // The assembled film: shot thumbnails in scene order, plus a "Play film" cinema mode
 // that runs the shots back to back with their voiceover line.
@@ -46,38 +46,30 @@ export default function Timeline({ shots, selectedId, onSelect, inspectorOpen })
 }
 
 function Cinema({ shots, onClose }) {
-  const [i, setI] = useState(0);
-  const videoRef = useRef(null);
-  const shot = shots[i];
-  const url = shot?.asset?.url;
-
   useEffect(() => {
     const onKey = (e) => e.key === 'Escape' && onClose();
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
 
-  useEffect(() => {
-    if (videoRef.current) videoRef.current.play().catch(() => {});
-  }, [i]);
-
-  const next = () => {
-    if (i < shots.length - 1) setI(i + 1);
-    else onClose();
-  };
+  // The film's shots become the TV's channels; the player rolls them back to back and its
+  // pills/prev-next let you jump between them. It closes itself when the last shot ends.
+  const clips = shots.map((s, i) => ({
+    src: s.asset?.url,
+    poster: s.asset?.thumbnail,
+    title: s.title,
+    subtitle: s.data?.vo ? `“${s.data.vo}”` : undefined,
+    badge: `${i + 1}/${shots.length}`,
+    label: String(i + 1).padStart(2, '0'),
+  }));
 
   return (
     <div className="cinema" onClick={onClose}>
       <div onClick={(e) => e.stopPropagation()} style={{ width: 'min(1120px, 100%)' }}>
-        {isVideo(url) ? (
-          <video ref={videoRef} src={url} poster={shot.asset?.thumbnail} controls autoPlay onEnded={next} />
-        ) : (
-          <img src={shot?.asset?.thumbnail} alt={shot?.title} style={{ width: '100%', borderRadius: 12 }} />
-        )}
+        <TvPlayer sources={clips} variant="frame" autoPlay onEnded={onClose} className="max-w-[1120px]" />
         <div className="cinema-bar">
-          <div className="cinema-vo">{shot?.data?.vo ? `“${shot.data.vo}”` : ''}</div>
-          <span className="cinema-count">{i + 1} / {shots.length}</span>
-          <button className="btn" onClick={next}>{i < shots.length - 1 ? 'Next shot →' : 'Finish'}</button>
+          <span className="tl-title">Final Film</span>
+          <span className="tl-spacer" />
           <button className="btn" onClick={onClose}>Close ✕</button>
         </div>
       </div>

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import * as api from './api.js';
 import { authEnabled } from './auth.js';
+import TvPlayer from './components/TvPlayer.jsx';
 
 // The public face of one film — reached by a share link and from the template gallery.
 //
@@ -90,7 +91,7 @@ export default function Showcase({ session }) {
 
       {project.export_url && (
         <section className="show-cut">
-          <video controls src={project.export_url} preload="metadata" />
+          <TvPlayer src={project.export_url} poster={stills[0]?.asset?.thumbnail} title={project.title || 'Final Cut'} variant="frame" />
         </section>
       )}
 

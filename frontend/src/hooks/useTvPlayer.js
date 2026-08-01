@@ -1,260 +1,155 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { channels } from "../data/channels";
+import { useCallback, useEffect, useRef, useState } from 'react';
 
-const DEFAULT_DURATION = 300;
-
-export function formatTime(seconds) {
-  const mins = Math.floor(seconds / 60);
-  const secs = Math.floor(seconds % 60);
-
-  return `${mins}:${secs.toString().padStart(2, "0")}`;
+// mm:ss for a seconds value; guards NaN/Infinity from an un-loaded <video>.
+export function fmt(t) {
+  if (!isFinite(t) || t < 0) t = 0;
+  const m = Math.floor(t / 60);
+  const s = Math.floor(t % 60);
+  return `${m}:${String(s).padStart(2, '0')}`;
 }
 
-export function useTvPlayer() {
-  const [currentChannel, setCurrentChannel] = useState(0);
+// Drives a real <video> for TvPlayer: playback, seek, volume, a clip playlist (the
+// "channels"), a brief static-noise transition between clips, and fullscreen. `clips` is an
+// array of { src, poster, title, subtitle, badge, label }; a single video is a one-clip list.
+export function useTvPlayer(videoRef, containerRef, clips, { autoPlay = false, startIndex = 0, onEnded } = {}) {
+  const [index, setIndex] = useState(startIndex);
+  const [playing, setPlaying] = useState(false);
+  const [muted, setMuted] = useState(false);
+  const [volume, setVolume] = useState(1);
+  const [time, setTime] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const [buffered, setBuffered] = useState(0);
+  const [switching, setSwitching] = useState(false);
+  const [started, setStarted] = useState(false);
+  const [fullscreen, setFullscreen] = useState(false);
 
-  const [isPlaying, setIsPlaying] = useState(false);
+  // Whether the clip that loads next should auto-play — set when the viewer was already
+  // watching and we swap the source, so a channel change doesn't silently pause the film.
+  const resume = useRef(autoPlay);
+  const switchTimer = useRef(null);
 
-  const [isMuted, setIsMuted] = useState(false);
+  const clip = clips[index] || clips[0];
 
-  const [volume, setVolume] = useState(80);
+  // Switch clips behind a short burst of static, like retuning a channel.
+  const go = useCallback((i, { play = true } = {}) => {
+    const n = clips.length;
+    if (n <= 1) return;
+    const next = ((i % n) + n) % n;
+    if (next === index) return;
+    resume.current = play;
+    setSwitching(true);
+    if (switchTimer.current) clearTimeout(switchTimer.current);
+    switchTimer.current = setTimeout(() => {
+      setIndex(next);
+      setTime(0);
+      setSwitching(false);
+    }, 320);
+  }, [clips.length, index]);
 
-  const [isPowered, setIsPowered] = useState(true);
+  // Mirror the <video>'s own events into state so custom controls stay in sync with the
+  // element (including changes we didn't initiate, e.g. keyboard media keys).
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v) return;
+    const onTime = () => setTime(v.currentTime);
+    const onMeta = () => setDuration(v.duration || 0);
+    const onPlay = () => { setPlaying(true); setStarted(true); };
+    const onPause = () => setPlaying(false);
+    const onVol = () => { setVolume(v.volume); setMuted(v.muted); };
+    const onProg = () => {
+      try { if (v.buffered.length) setBuffered(v.buffered.end(v.buffered.length - 1)); } catch { /* not ready */ }
+    };
+    const onEnd = () => {
+      if (index < clips.length - 1) go(index + 1);
+      else { setPlaying(false); onEnded?.(); }
+    };
+    v.addEventListener('timeupdate', onTime);
+    v.addEventListener('loadedmetadata', onMeta);
+    v.addEventListener('durationchange', onMeta);
+    v.addEventListener('play', onPlay);
+    v.addEventListener('pause', onPause);
+    v.addEventListener('volumechange', onVol);
+    v.addEventListener('progress', onProg);
+    v.addEventListener('ended', onEnd);
+    return () => {
+      v.removeEventListener('timeupdate', onTime);
+      v.removeEventListener('loadedmetadata', onMeta);
+      v.removeEventListener('durationchange', onMeta);
+      v.removeEventListener('play', onPlay);
+      v.removeEventListener('pause', onPause);
+      v.removeEventListener('volumechange', onVol);
+      v.removeEventListener('progress', onProg);
+      v.removeEventListener('ended', onEnd);
+    };
+  }, [videoRef, index, clips.length, go, onEnded]);
 
-  const [showStatic, setShowStatic] = useState(false);
+  // When the source changes (channel switch, or first mount with autoPlay), reload and pick
+  // up playback if the viewer was mid-film.
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v) return;
+    setBuffered(0);
+    if (resume.current) v.play().catch(() => {});
+  }, [videoRef, index]);
 
-  const [showControls, setShowControls] = useState(false);
+  // Track OS/browser fullscreen so the expand/shrink icon reflects reality.
+  useEffect(() => {
+    const onFs = () => setFullscreen(document.fullscreenElement === containerRef.current);
+    document.addEventListener('fullscreenchange', onFs);
+    return () => document.removeEventListener('fullscreenchange', onFs);
+  }, [containerRef]);
 
-  const [progress, setProgress] = useState(0);
-
-  const [duration, setDuration] = useState(DEFAULT_DURATION);
-
-  const hideControlsTimeout = useRef(null);
-
-  const ticker = useRef(null);
-
-  const current = channels[currentChannel];
-
-  const clearTicker = () => {
-    if (ticker.current) {
-      clearInterval(ticker.current);
-      ticker.current = null;
-    }
-  };
-
-  const startTicker = useCallback(() => {
-    clearTicker();
-
-    ticker.current = setInterval(() => {
-      setProgress((prev) => {
-        if (prev >= duration) {
-          clearTicker();
-          setIsPlaying(false);
-          return duration;
-        }
-
-        return prev + 1;
-      });
-    }, 1000);
-  }, [duration]);
+  useEffect(() => () => { if (switchTimer.current) clearTimeout(switchTimer.current); }, []);
 
   const togglePlay = useCallback(() => {
-    if (!isPowered) return;
+    const v = videoRef.current;
+    if (!v) return;
+    if (v.paused) v.play().catch(() => {});
+    else v.pause();
+  }, [videoRef]);
 
-    setIsPlaying((p) => !p);
-  }, [isPowered]);
+  const seekTo = useCallback((seconds) => {
+    const v = videoRef.current;
+    if (!v || !isFinite(v.duration)) return;
+    v.currentTime = Math.max(0, Math.min(v.duration, seconds));
+  }, [videoRef]);
 
-  useEffect(() => {
-    if (isPlaying) {
-      startTicker();
-    } else {
-      clearTicker();
-    }
+  const seekFraction = useCallback((f) => {
+    const v = videoRef.current;
+    if (v && isFinite(v.duration)) seekTo(f * v.duration);
+  }, [videoRef, seekTo]);
 
-    return clearTicker;
-  }, [isPlaying, startTicker]);
+  const changeVolume = useCallback((value) => {
+    const v = videoRef.current;
+    if (!v) return;
+    v.volume = value;
+    v.muted = value === 0;
+  }, [videoRef]);
 
-  const seek = (percent) => {
-    const value = Math.max(
-      0,
-      Math.min(duration, Math.round(duration * percent))
-    );
+  const toggleMute = useCallback(() => {
+    const v = videoRef.current;
+    if (!v) return;
+    if (v.muted || v.volume === 0) { v.muted = false; if (v.volume === 0) v.volume = 0.8; }
+    else v.muted = true;
+  }, [videoRef]);
 
-    setProgress(value);
-  };
-
-  const randomDuration = () =>
-    240 + Math.floor(Math.random() * 120);
-
-  const switchChannel = (index) => {
-    if (!isPowered) return;
-
-    setShowStatic(true);
-
-    clearTicker();
-
-    setIsPlaying(false);
-
-    setTimeout(() => {
-      setCurrentChannel(index);
-      setDuration(randomDuration());
-      setProgress(0);
-      setShowStatic(false);
-    }, 350);
-  };
-
-  const nextChannel = () => {
-    switchChannel((currentChannel + 1) % channels.length);
-  };
-
-  const previousChannel = () => {
-    switchChannel(
-      (currentChannel - 1 + channels.length) %
-        channels.length
-    );
-  };
-
-  const toggleMute = () => {
-    if (isMuted) {
-      setVolume(80);
-      setIsMuted(false);
-    } else {
-      setVolume(0);
-      setIsMuted(true);
-    }
-  };
-
-  const updateVolume = (value) => {
-    setVolume(value);
-
-    setIsMuted(value === 0);
-  };
-
-  const togglePower = () => {
-    if (isPowered) {
-      clearTicker();
-
-      setIsPlaying(false);
-
-      setShowStatic(true);
-
-      setTimeout(() => {
-        setIsPowered(false);
-        setShowStatic(false);
-      }, 300);
-    } else {
-      setIsPowered(true);
-
-      setProgress(0);
-
-      setDuration(randomDuration());
-
-      setTimeout(() => {
-        setShowStatic(false);
-      }, 250);
-    }
-  };
-
-  const revealControls = () => {
-    if (!isPlaying) return;
-
-    setShowControls(true);
-
-    if (hideControlsTimeout.current) {
-      clearTimeout(hideControlsTimeout.current);
-    }
-
-    hideControlsTimeout.current = setTimeout(() => {
-      setShowControls(false);
-    }, 2500);
-  };
-
-  useEffect(() => {
-    const handler = (e) => {
-      switch (e.code) {
-        case "Space":
-          e.preventDefault();
-          togglePlay();
-          break;
-
-        case "ArrowRight":
-          nextChannel();
-          break;
-
-        case "ArrowLeft":
-          previousChannel();
-          break;
-
-        case "KeyM":
-          toggleMute();
-          break;
-
-        case "KeyP":
-          togglePower();
-          break;
-      }
-    };
-
-    window.addEventListener("keydown", handler);
-
-    return () => {
-      window.removeEventListener("keydown", handler);
-    };
-  });
-
-  useEffect(() => {
-    return () => {
-      clearTicker();
-
-      if (hideControlsTimeout.current) {
-        clearTimeout(hideControlsTimeout.current);
-      }
-    };
-  }, []);
+  const toggleFullscreen = useCallback(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    if (document.fullscreenElement) document.exitFullscreen?.();
+    else el.requestFullscreen?.();
+  }, [containerRef]);
 
   return {
-    channels,
-
-    current,
-
-    currentChannel,
-
-    isPlaying,
-
-    isMuted,
-
-    volume,
-
-    progress,
-
-    duration,
-
-    isPowered,
-
-    showStatic,
-
-    showControls,
-
-    progressPercent: (progress / duration) * 100,
-
-    formattedTime: `${formatTime(progress)} / ${formatTime(duration)}`,
-
-    togglePlay,
-
-    toggleMute,
-
-    togglePower,
-
-    updateVolume,
-
-    seek,
-
-    revealControls,
-
-    switchChannel,
-
-    nextChannel,
-
-    previousChannel,
+    clip, index, count: clips.length,
+    playing, muted, volume, time, duration, buffered,
+    switching, started, fullscreen,
+    progress: duration ? (time / duration) * 100 : 0,
+    bufferedPercent: duration ? (buffered / duration) * 100 : 0,
+    timeLabel: `${fmt(time)} / ${fmt(duration)}`,
+    togglePlay, seekTo, seekFraction, changeVolume, toggleMute, toggleFullscreen,
+    next: () => go(index + 1),
+    prev: () => go(index - 1),
+    goTo: (i) => go(i),
   };
 }

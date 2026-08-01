@@ -3,6 +3,7 @@ import { Handle, Position } from '@xyflow/react';
 import { KIND_LABEL, STATUS_LABEL, statusColor, isVideo } from './ui.js';
 import { verdictColor, verdictLabel, failedChecks } from './qc.js';
 import { foundingFooter } from './founding.js';
+import TvPlayer from './components/TvPlayer.jsx';
 
 // What a card says while it works, by kind and lifecycle beat. Kept specific on purpose —
 // "animating 8s" reads as a film being shot; a generic "rendering…" reads as a dead spinner.
@@ -66,9 +67,8 @@ function CineNodeImpl({ data, selected }) {
 
         <div className={`node-media ${showThumb ? '' : 'empty'} ${running ? 'working' : ''} ${reviewing ? 'reviewing' : ''}`}>
           {playing && isVid
-            ? <video className="node-video nodrag" src={asset.url} poster={showThumb || undefined}
-                     autoPlay controls playsInline
-                     onClick={(e) => e.stopPropagation()} onEnded={() => setPlaying(false)} />
+            ? <TvPlayer variant="slim" src={asset.url} poster={showThumb || undefined}
+                        autoPlay onEnded={() => setPlaying(false)} className="nodrag nopan" />
             : showThumb && <img src={showThumb} alt={title} loading="lazy" draggable={false} />}
           {/* Shimmer until the still lands, then a scan sweep while the gate looks it over. */}
           {running && !showThumb && <span className="media-skeleton" aria-hidden="true" />}
@@ -188,9 +188,8 @@ function CineNodeImpl({ data, selected }) {
       {hasMedia && (
         <div className={`node-media ${showThumb ? '' : 'empty'} ${running ? 'working' : ''} ${reviewing ? 'reviewing' : ''}`}>
           {playing && isVid
-            ? <video className="node-video nodrag" src={asset.url} poster={showThumb || undefined}
-                     autoPlay controls playsInline
-                     onClick={(e) => e.stopPropagation()} onEnded={() => setPlaying(false)} />
+            ? <TvPlayer variant="slim" src={asset.url} poster={showThumb || undefined}
+                        autoPlay onEnded={() => setPlaying(false)} className="nodrag nopan" />
             : showThumb && <img src={showThumb} alt={title} loading="lazy" draggable={false} />}
           {/* A shimmer skeleton holds the frame's shape until the first take lands; once a take
               is up, a scan sweep signals the gate is looking before its verdict pill appears. */}

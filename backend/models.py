@@ -571,3 +571,12 @@ class StageEvent(BaseModel):
     phase: Optional[str] = None
     stage_status: Optional[StageStatus] = None   # stage_status only
     gate: Optional[StageGate] = None             # gate only: the decision just reached
+    # error only: a machine-readable reason the canvas can act on rather than parse from the
+    # label. "credit_exhausted" → the shared preview ran out of credits; offer bring-your-own-key.
+    code: Optional[str] = None
+
+
+class SetKeyRequest(BaseModel):
+    """A caller storing their own Genblaze (GMICloud) key so their renders run for real on
+    their own credits. Held encrypted at rest, per account (see pipeline/keyvault.py)."""
+    key: str
