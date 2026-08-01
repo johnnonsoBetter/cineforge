@@ -11,8 +11,10 @@ WORKDIR /app/frontend
 # drifts from package.json.
 COPY frontend/package.json frontend/package-lock.json* ./
 RUN npm install
-# vite.config.js has root:'src', outDir:'..' -> writes /app/frontend/index.html
-COPY frontend/vite.config.js ./
+# vite.config.js has root:'src', outDir:'..' -> writes /app/frontend/index.html. postcss +
+# tailwind configs must be copied too, or Vite builds without Tailwind and `@tailwind utilities`
+# passes through as dead text -> the landing renders with no layout utilities.
+COPY frontend/vite.config.js frontend/postcss.config.js frontend/tailwind.config.js ./
 COPY frontend/src ./src
 # Optional auth: pass these build args to bake Supabase login into the canvas. Omit them and
 # the app builds single-user (no login gate). Vite inlines VITE_-prefixed vars at build time.

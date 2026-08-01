@@ -12,6 +12,7 @@ import { CineNode } from './CineNode.jsx';
 import { CoverageGroup } from './CoverageGroup.jsx';
 import Hero from './Hero.jsx';
 import Rail from './Rail.jsx';
+import Monitor from './Monitor.jsx';
 import Inspector from './Inspector.jsx';
 import Timeline from './Timeline.jsx';
 import ContextMenu from './ContextMenu.jsx';
@@ -695,12 +696,23 @@ function Studio({ session }) {
   );
 
   const [zoom, setZoom] = useState(100);
+  // The production monitor now lives in the top bar as a compact chip; its full board opens
+  // in a popover so the conversation sidebar stays purely the director's log.
+  const [monitorOpen, setMonitorOpen] = useState(false);
   useEffect(() => {
     const id = setInterval(() => setZoom(Math.round((rf.getZoom?.() || 1) * 100)), 350);
     return () => clearInterval(id);
   }, [rf]);
 
   const hasGraph = nodes.length > 0;
+  // Compact production summary for the top-bar chip: how many stages are cleared, and what
+  // the run is doing right now. The full board lives behind the chip in a popover.
+  const anyStage = stages.some((s) => s.status !== 'pending');
+  const approvedStages = stages.filter((s) => s.status === 'approved').length;
+  const runningStage = stages.find((s) => s.status === 'running');
+  const stageSummary = openGate ? `Gate · ${STAGE_LABEL[openGate.key]}`
+    : runningStage ? STAGE_LABEL[runningStage.key]
+    : `${approvedStages}/${stages.length} stages`;
 
   return (
     <div className={`app${hasGraph ? '' : ' empty'}`}>
@@ -710,12 +722,39 @@ function Studio({ session }) {
           <span className="brand-sub">AI Film Studio</span>
         </div>
         <div className="topbar-title">{storyTitle || (hasGraph ? 'Untitled Film' : '')}</div>
-        {hasGraph && (
-          <span className="chip">
-            {busy ? 'Working'
-              : openGate ? `Gate · ${STAGE_LABEL[openGate.key]}`
-              : built ? 'Ready' : 'Draft'}
-          </span>
+        {hasGraph && anyStage ? (
+          <div className="stage-monitor">
+            <button
+              className={`chip stage-chip ${monitorOpen ? 'active' : ''}`}
+              onClick={() => setMonitorOpen((o) => !o)}
+              title="Production monitor — click to review"
+            >
+              <span className={`dot ${busy ? 'pulse' : ''}`} style={{
+                background: openGate ? 'var(--amber)' : busy ? 'var(--gold)' : 'var(--green)',
+              }} />
+              {stageSummary}
+              <span className="stage-caret">{monitorOpen ? '▴' : '▾'}</span>
+            </button>
+            {monitorOpen && (
+              <>
+                <div className="stage-pop-scrim" onClick={() => setMonitorOpen(false)} />
+                <div className="stage-pop" role="dialog" aria-label="Production monitor">
+                  <Monitor
+                    progress={progress}
+                    stages={stages}
+                    current={busy ? currentStage : null}
+                    gate={openGate}
+                    busy={busy}
+                    onApprove={approveStage}
+                    onHold={holdStage}
+                    onSelectNode={(id) => { setSelectedId(id); setMonitorOpen(false); }}
+                  />
+                </div>
+              </>
+            )}
+          </div>
+        ) : hasGraph && (
+          <span className="chip">{built ? 'Ready' : 'Draft'}</span>
         )}
         <div className="topbar-spacer" />
         <div className="topbar-right">
@@ -797,7 +836,6 @@ function Studio({ session }) {
             // gate rather than only once the whole film is finished.
             canEdit={!!projectId && (built || !!openGate)}
             nodes={nodes}
-            stages={stages}
             targetNode={selectedNode && ['character', 'environment', 'scene', 'keyframe', 'shot'].includes(selectedNode.kind) ? selectedNode : null}
             onClearTarget={() => setSelectedId(null)}
             onFocusNode={setSelectedId}
@@ -808,12 +846,6 @@ function Studio({ session }) {
             onApplyProposal={applyProposal}
             onDiscardProposal={discardProposal}
             busy={busy}
-            progress={progress}
-            current={currentStage}
-            openGate={openGate}
-            onApproveStage={approveStage}
-            onHoldStage={holdStage}
-            onSelectNode={setSelectedId}
             impact={impact}
             onRegenerate={regenerate}
             onToggleLock={toggleLock}

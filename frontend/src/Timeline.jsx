@@ -5,12 +5,20 @@ import TvPlayer from './components/TvPlayer.jsx';
 // that runs the shots back to back with their voiceover line.
 export default function Timeline({ shots, selectedId, onSelect, inspectorOpen }) {
   const [playing, setPlaying] = useState(false);
+  // The filmstrip walls off the bottom of the canvas when it's always open — let the director
+  // tuck it into a compact pill to reclaim the view, and roll it back out to scrub the cut.
+  const [collapsed, setCollapsed] = useState(false);
   if (!shots.length) return null;
 
   return (
     <>
-      <div className={`timeline ${inspectorOpen ? 'with-inspector' : ''}`}>
+      <div className={`timeline ${inspectorOpen ? 'with-inspector' : ''} ${collapsed ? 'collapsed' : ''}`}>
         <div className="tl-head">
+          <button className="tl-collapse" onClick={() => setCollapsed((c) => !c)}
+                  title={collapsed ? 'Show the filmstrip' : 'Hide the filmstrip'}
+                  aria-label={collapsed ? 'Show the filmstrip' : 'Hide the filmstrip'}>
+            {collapsed ? '▸' : '▾'}
+          </button>
           <span className="tl-title">Final Film</span>
           <span className="mono-label">{shots.length} shot{shots.length > 1 ? 's' : ''} · {shots.length * 8}s</span>
           <span className="tl-spacer" />
@@ -18,6 +26,7 @@ export default function Timeline({ shots, selectedId, onSelect, inspectorOpen })
             ▶ Play film
           </button>
         </div>
+        {!collapsed && (
         <div className="tl-strip">
           {shots.map((s, i) => {
             const thumb = s.asset?.thumbnail;
@@ -39,6 +48,7 @@ export default function Timeline({ shots, selectedId, onSelect, inspectorOpen })
             );
           })}
         </div>
+        )}
       </div>
       {playing && <Cinema shots={shots} onClose={() => setPlaying(false)} />}
     </>

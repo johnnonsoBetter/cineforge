@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import Monitor from './Monitor.jsx';
 import EditProposal from './EditProposal.jsx';
 import EditHistory from './EditHistory.jsx';
 import RegenMenu from './RegenMenu.jsx';
@@ -13,9 +12,7 @@ import {
 // keeps the director/user turns, and hosts the conversational-edit composer.
 export default function Rail({ messages, canEdit, nodes, targetNode, onClearTarget, onFocusNode,
                                onPropose, proposal, onApplyProposal, onDiscardProposal,
-                               editHistory, onUndoEdit,
-                               busy, progress, current, stages,
-                               openGate, onApproveStage, onHoldStage, onSelectNode,
+                               editHistory, onUndoEdit, busy,
                                impact, onRegenerate, onToggleLock }) {
   const [draft, setDraft] = useState('');
   const [caret, setCaret] = useState(0);
@@ -180,22 +177,6 @@ export default function Rail({ messages, canEdit, nodes, targetNode, onClearTarg
 
   return (
     <div className="rail">
-      <div className="rail-head">
-        <div className="mono-label">Creative Director</div>
-        <div className="rail-head-title">Orchestration is the product.</div>
-      </div>
-
-      <Monitor
-        progress={progress}
-        stages={stages}
-        current={busy ? current : null}
-        gate={openGate}
-        busy={busy}
-        onApprove={onApproveStage}
-        onHold={onHoldStage}
-        onSelectNode={onSelectNode}
-      />
-
       <div className="rail-log" ref={logRef}>
         {messages.map((m) => (
           <div key={m.id} className={`msg msg-${m.role}`}>
