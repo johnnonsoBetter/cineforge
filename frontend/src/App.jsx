@@ -57,7 +57,7 @@ function Studio({ session }) {
   const [progress, setProgress] = useState({});       // stage key -> { done, total }
   const [phases, setPhases] = useState({});           // node_id -> transient beat (reviewing/rerendering)
   const [menu, setMenu] = useState(null);             // { x, y, nodeId }
-  const [shotAt, setShotAt] = useState(null);         // { node, x, y } — new-setup dialog
+  const [shotAt, setShotAt] = useState(null);         // { node, mode } — new-setup modal
   const [library, setLibrary] = useState([]);         // the caller's films, for the empty-state picker
   const [visibility, setVis] = useState('private');   // 'private' | 'public' — the open film's share state
 
@@ -122,6 +122,9 @@ function Studio({ session }) {
       // A settled take speaks for itself (verdict / ready), so drop any phase narration; a
       // still-running emit is the preview frame arriving, which keeps its beat.
       if (ev.node.status !== 'running') clearPhase(ev.node.node_id);
+      // The Final Film node arrives carrying the stitched cut — surface the download the
+      // moment it lands, so the header flips from "Export film" to "Download film" on its own.
+      if (ev.node.kind === 'timeline' && ev.node.asset?.url) setExportUrl(ev.node.asset.url);
     }
     // The gate narrating one card in place: frame under review, or re-rolling on a hard fail.
     else if (ev.type === 'node_phase' && ev.node_id) {
@@ -385,17 +388,16 @@ function Studio({ session }) {
   );
 
   // Both openers share one dialog; `mode` picks the labels, cost line and submit handler.
-  const openShotDialog = useCallback((node, at) => {
-    // Only opens the Add shot popup — it does not select the node, so the detail stays as it
+  const openShotDialog = useCallback((node) => {
+    // Only opens the New-shot modal — it does not select the node, so the detail stays as it
     // was. Opening the detail is the card click's job (see onNodeClick), not this button's.
     setMenu(null);
-    setShotAt({ node, mode: 'shot', ...at });
+    setShotAt({ node, mode: 'shot' });
   }, []);
 
-  const openKeyframeDialog = useCallback((node, at) => {
-    setSelectedId(node.node_id);
+  const openKeyframeDialog = useCallback((node) => {
     setMenu(null);
-    setShotAt({ node, mode: 'keyframe', ...at });
+    setShotAt({ node, mode: 'keyframe' });
   }, []);
 
   // ---- ask the gate for a second opinion ----
@@ -475,10 +477,28 @@ function Studio({ session }) {
 
   const discardProposal = useCallback(() => setProposal(null), []);
 
-  const undoEdit = useCallback(() => {
-    if (busy || proposal) return false;
-    return proposeEdit('Undo that edit');
-  }, [busy, proposal, proposeEdit]);
+  // Undo is LIFO — it always reverses the latest standing edit. A free undo (nothing had
+  // rendered) applies straight away so the click feels like a real undo; one that would
+  // re-render lands as a proposal first, so its cost is seen before it's paid.
+  const undoEdit = useCallback(async (edit) => {
+    if (busy || proposal || proposalRequestRef.current) return false;
+    proposalRequestRef.current = true;
+    try {
+      const p = await api.proposeEdit(projectId, 'Undo that edit', edit?.target_node_id);
+      if (!p.ok) {
+        pushMsg('error', p.reason || "There's nothing to undo yet.");
+        return false;
+      }
+      if (p.rendered || p.impact?.stale?.length) setProposal(p);
+      else await applyProposal(p);
+      return true;
+    } catch (e) {
+      pushMsg('error', `I couldn't undo that: ${e.message}`);
+      return false;
+    } finally {
+      proposalRequestRef.current = false;
+    }
+  }, [projectId, busy, proposal, pushMsg, applyProposal]);
 
   // ---- rename an entity (free: nothing is re-rendered) ----
   const renameEntity = useCallback(async (entityId, newName) => {
@@ -781,17 +801,11 @@ function Studio({ session }) {
             edges={rfEdges}
             nodeTypes={nodeTypes}
             onNodeClick={(e, n) => {
+              // Clicking a card only opens its detail. The New-shot modal is a decision
+              // surface that covers the canvas, so it must not compete with the Inspector —
+              // it opens only from the card's explicit + Shot button (see openShotDialog).
               setSelectedId(n.id);
               setMenu(null);
-              // A keyframe with a master frame is the one card you call coverage from, so
-              // clicking it opens the detail and the Add shot popup together — the popup rides
-              // beside the frame, the Inspector carries the rest. Other kinds just select.
-              const node = nodes.find((x) => x.node_id === n.id);
-              if (node?.kind === 'keyframe' && node.asset?.url) {
-                setShotAt({ node, mode: 'shot', x: e.clientX, y: e.clientY });
-              } else {
-                setShotAt(null);
-              }
             }}
             onNodeContextMenu={(e, n) => {
               e.preventDefault();
@@ -877,7 +891,6 @@ function Studio({ session }) {
           {shotAt && (
             <ShotDialog
               node={shotAt.node}
-              at={shotAt}
               mode={shotAt.mode}
               busy={busy}
               onClose={() => setShotAt(null)}

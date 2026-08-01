@@ -71,6 +71,21 @@ export const COVERAGE_OPTIONS = {
   move: ['locked camera', 'slow push-in', 'slow pull-back', 'handheld drift', 'slow pan'],
 };
 
+// How an applied edit reads in the history — the verb, not the node kind.
+export const EDIT_CHANGE_LABEL = { rename: 'Rename', field: 'Rewrite', note: 'Note', undo: 'Undo' };
+
+// A short, human relative time from an epoch-seconds timestamp (Python time.time()).
+export function timeAgo(sec) {
+  if (!sec) return '';
+  const d = Math.max(0, Date.now() / 1000 - sec);
+  if (d < 45) return 'just now';
+  if (d < 90) return '1m ago';
+  if (d < 3600) return `${Math.round(d / 60)}m ago`;
+  if (d < 5400) return '1h ago';
+  if (d < 86400) return `${Math.round(d / 3600)}h ago`;
+  return `${Math.round(d / 86400)}d ago`;
+}
+
 export const isVideo = (url) => typeof url === 'string' && /\.(mp4|webm|mov)(\?|$)/i.test(url);
 
 export function shortHash(h) {

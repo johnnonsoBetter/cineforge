@@ -185,15 +185,15 @@ const CSS = `
     letter-spacing: 0.22em;
     text-transform: uppercase;
     color: var(--gold);
-    opacity: 0.7;
-    margin-bottom: 22px;
+    padding: 7px 14px;
+    border-radius: 999px;
+    border: 1px solid rgba(228,165,85,0.22);
+    background: rgba(228,165,85,0.06);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    margin-bottom: 24px;
   }
-  .cf-eyebrow-dot {
-    width: 5px; height: 5px;
-    border-radius: 50%;
-    background: var(--gold);
-    opacity: 0.8;
-  }
+  .cf-eyebrow svg { width: 12px; height: 12px; opacity: 0.85; }
   .cf-wordmark {
     font-family: var(--font-display);
     font-size: clamp(54px, 10vw, 88px);
@@ -726,6 +726,20 @@ const CSS = `
     text-transform: uppercase;
   }
 
+  /* ── Entrance motion ── */
+  @keyframes cf-rise {
+    from { opacity: 0; transform: translateY(22px); }
+    to   { opacity: 1; transform: none; }
+  }
+  .cf-in {
+    opacity: 0;
+    animation: cf-rise 0.7s cubic-bezier(0.2, 0.8, 0.25, 1) forwards;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .cf-in { animation: none; opacity: 1; }
+    .cf-root::before { animation: none; }
+  }
+
   @media (max-width: 500px) {
     .cf-genre-grid, .cf-genre-names, .cf-gallery-grid { grid-template-columns: repeat(2, 1fr); }
     .cf-wordmark { font-size: 52px; }
@@ -801,19 +815,29 @@ export default function Landing({ session }) {
       <main className="cf-main">
         {/* Hero */}
         <div className="cf-hero">
-          <div className="cf-eyebrow">
-            <span className="cf-eyebrow-dot" />
+          <div className="cf-eyebrow cf-in" style={{ animationDelay: '0.05s' }}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6">
+              <rect x="2.5" y="4" width="19" height="16" rx="2" />
+              <line x1="7" y1="4" x2="7" y2="20" />
+              <line x1="17" y1="4" x2="17" y2="20" />
+              <line x1="2.5" y1="9.3" x2="7" y2="9.3" />
+              <line x1="2.5" y1="14.7" x2="7" y2="14.7" />
+              <line x1="17" y1="9.3" x2="21.5" y2="9.3" />
+              <line x1="17" y1="14.7" x2="21.5" y2="14.7" />
+            </svg>
             AI Film Studio
           </div>
-          <h1 className="cf-wordmark">CineForge</h1>
-          <p className="cf-tagline">Give us one idea. We direct the whole film.</p>
+          <h1 className="cf-wordmark cf-in" style={{ animationDelay: '0.15s' }}>CineForge</h1>
+          <p className="cf-tagline cf-in" style={{ animationDelay: '0.25s' }}>Give us one idea. We direct the whole film.</p>
         </div>
 
         {/* Composer */}
-        <Composer onForge={startForge} />
+        <div className="cf-in" style={{ animationDelay: '0.35s' }}>
+          <Composer onForge={startForge} />
+        </div>
 
         {/* Templates */}
-        <section className="cf-section" id="cf-templates">
+        <section className="cf-section cf-in" id="cf-templates" style={{ animationDelay: '0.45s' }}>
           <div className="cf-section-header">
             <span className="cf-section-label">Select template</span>
             <span className="cf-section-rule" />

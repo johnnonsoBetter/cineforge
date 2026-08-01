@@ -773,6 +773,7 @@ button:disabled { cursor: default; }
   overflow: hidden;
 }
 .node-media img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.node-media video.node-video { width: 100%; height: 100%; object-fit: cover; display: block; background: #000; }
 /* A cast sheet is a multi-view reference (front / 3⁄4 / side / close-up), not a single frame —
    crop-to-fill would clip whole views, so show the sheet whole. Rounded + shadowed so it reads
    as a page resting on the mat, and it eases up on hover for a premium, tactile lift. */
@@ -799,6 +800,9 @@ button:disabled { cursor: default; }
   font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.08em;
   color: var(--cream);
 }
+/* The badge doubles as the play control — a reset so a <button> keeps the pill look. */
+button.node-play { border: none; cursor: pointer; transition: background 0.16s ease; }
+button.node-play:hover { background: rgba(20, 16, 12, 0.92); }
 
 /* The keyframe's verdict, floated over the frame's top-right corner — a translucent, tinted
    pill so the gate result reads at a glance without a prose row stealing height below. */
@@ -2722,34 +2726,7 @@ button:disabled { cursor: default; }
 .proposal-actions .btn-gold { flex: 1; }
 .proposal-actions .btn-gold, .proposal-actions .btn { min-height: 40px; }
 
-.edit-history {
-  margin: 0 0 12px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: rgba(0, 0, 0, 0.14);
-}
-.edit-history summary {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  min-height: 40px;
-  padding: 0 12px;
-  color: var(--muted);
-  font-family: var(--mono);
-  font-size: 10px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  cursor: pointer;
-}
-.edit-history summary em { color: var(--gold); font-style: normal; }
-.edit-history ol { list-style: none; margin: 0; padding: 0 8px 8px; display: grid; gap: 4px; }
-.edit-history li { display: flex; align-items: center; gap: 8px; border-top: 1px solid var(--line); }
-.history-copy { flex: 1; min-width: 0; padding: 8px 4px; text-align: left; color: var(--cream); }
-.history-copy span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
-.history-copy em { display: block; margin-top: 2px; color: var(--faint); font-family: var(--mono); font-size: 9px; font-style: normal; text-transform: uppercase; }
-.edit-history li.undone .history-copy span { color: var(--faint); text-decoration: line-through; }
-.history-undo { min-width: 48px; min-height: 36px; color: var(--gold); font-size: 11px; }
-.history-undo:hover:not(:disabled) { color: var(--cream); }
+/* The edit-history panel is styled with Tailwind utilities in EditHistory.jsx. */
 
 /* The gate speaking in the conversation, alongside the reviewer's per-asset voice. */
 .msg-gate {
@@ -2822,43 +2799,71 @@ button:disabled { cursor: default; }
   background: rgba(228, 165, 85, 0.14);
 }
 
-.shot-dialog {
+.shot-dialog-layer {
   position: fixed;
+  inset: 0;
   z-index: 70;
-  width: 296px;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(11, 9, 7, 0.78);
+  backdrop-filter: blur(2px);
+  animation: fade 0.2s ease-out;
+}
+
+.shot-dialog {
+  width: min(520px, 100%);
+  max-height: min(760px, calc(100vh - 48px));
+  overflow: hidden;
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: 16px;
   background: var(--surface);
   box-shadow: 0 22px 54px rgba(0, 0, 0, 0.62);
+  animation: rise 0.28s cubic-bezier(0.2, 0.8, 0.25, 1);
 }
 
 .shot-dialog-head {
   display: flex;
-  align-items: baseline;
-  gap: 8px;
-  padding: 9px 11px 8px;
+  align-items: center;
+  gap: 12px;
+  padding: 16px;
   border-bottom: 1px solid var(--line);
 }
+.shot-dialog-head > div { flex: 1; min-width: 0; }
 .shot-dialog-head .mono-label { font-size: 9px; letter-spacing: 0.14em; }
 
 .shot-dialog-head strong {
-  flex: 1;
-  font-size: 12.5px;
+  display: block;
+  margin-top: 3px;
+  font-size: 17px;
   font-weight: 500;
   color: var(--cream);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.shot-mode-badge {
+  flex: none;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  padding: 4px 8px;
+  color: var(--gold);
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
 
-.shot-dialog-body { padding: 2px 11px 10px; max-height: 46vh; overflow-y: auto; }
-.shot-row { margin-top: 9px; }
+.shot-dialog-body { padding: 16px; max-height: calc(100vh - 210px); overflow-y: auto; }
+.shot-dialog-intro { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.5; }
+.shot-row { margin-top: 16px; }
 .shot-row .mono-label { display: block; margin-bottom: 4px; font-size: 9px; letter-spacing: 0.14em; }
 .shot-row .chip-row { gap: 4px; }
 
 /* Nothing is preselected: a blank form is a valid request — "shoot it as written". */
 .opt-chip {
-  padding: 3px 7px;
+  min-height: 36px;
+  padding: 7px 10px;
   border: 1px solid var(--line);
   border-radius: 5px;
   background: transparent;
@@ -2895,11 +2900,16 @@ button:disabled { cursor: default; }
   display: flex;
   align-items: center;
   gap: 9px;
-  padding: 8px 11px;
+  padding: 12px 16px;
   border-top: 1px solid var(--line);
 }
 
 .shot-dialog-foot .mono-label { flex: 1; line-height: 1.35; font-size: 9px; letter-spacing: 0.06em; }
+.shot-dialog-foot .btn-gold { min-width: 96px; min-height: 40px; padding: 0 16px; }
+.shot-dialog button:focus-visible, .shot-note:focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: 2px;
+}
 
 .beat-text.dim { color: var(--faint); font-style: italic; }
 
@@ -2908,8 +2918,9 @@ button:disabled { cursor: default; }
 .suggest-btn {
   display: block;
   width: 100%;
-  margin-top: 9px;
-  padding: 6px 0;
+  margin-top: 16px;
+  min-height: 44px;
+  padding: 8px 12px;
   border: 1px solid var(--line-strong);
   border-radius: 6px;
   background: rgba(228, 165, 85, 0.08);
@@ -2938,6 +2949,13 @@ button:disabled { cursor: default; }
 
 .suggest-why.bad { border-left-color: var(--red); color: var(--muted); }
 .suggest-why .mono-label { display: block; margin-top: 4px; font-size: 9px; letter-spacing: 0.06em; }
+
+@media (max-width: 640px) {
+  .shot-dialog-layer { align-items: end; padding: 0; }
+  .shot-dialog { width: 100%; max-height: 90vh; border-radius: 16px 16px 0 0; }
+  .shot-dialog-body { max-height: calc(90vh - 174px); }
+  .shot-dialog-foot { align-items: flex-end; }
+}
 
 /* ---------- login gate ---------- */
 

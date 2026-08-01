@@ -1,4 +1,4 @@
-import { memo } from 'react';
+import { memo, useEffect, useState } from 'react';
 import { Handle, Position } from '@xyflow/react';
 import { KIND_LABEL, STATUS_LABEL, statusColor, isVideo } from './ui.js';
 import { verdictColor, verdictLabel, failedChecks } from './qc.js';
@@ -35,6 +35,13 @@ function CineNodeImpl({ data, selected }) {
   const thumb = asset?.thumbnail || asset?.url;
   const showThumb = thumb && !isVideo(thumb) ? thumb : asset?.thumbnail;
 
+  // A video asset (a shot's clip, or the stitched final cut) plays right on the card: the
+  // play badge swaps the poster for a real <video>, so a director scans the cut without ever
+  // leaving the canvas. A fresh take (new url after a regenerate) drops back to the poster.
+  const isVid = isVideo(asset?.url);
+  const [playing, setPlaying] = useState(false);
+  useEffect(() => { setPlaying(false); }, [asset?.url]);
+
   // A shot is a clip, so its card is a compact video card: the frame, its length, and only
   // the two things a director scans a cut for — which setup it is, and whether the gate passed
   // it. Everything else (coverage, takes, the full verdict) lives in the Inspector.
@@ -58,7 +65,11 @@ function CineNodeImpl({ data, selected }) {
         </button>
 
         <div className={`node-media ${showThumb ? '' : 'empty'} ${running ? 'working' : ''} ${reviewing ? 'reviewing' : ''}`}>
-          {showThumb && <img src={showThumb} alt={title} loading="lazy" draggable={false} />}
+          {playing && isVid
+            ? <video className="node-video nodrag" src={asset.url} poster={showThumb || undefined}
+                     autoPlay controls playsInline
+                     onClick={(e) => e.stopPropagation()} onEnded={() => setPlaying(false)} />
+            : showThumb && <img src={showThumb} alt={title} loading="lazy" draggable={false} />}
           {/* Shimmer until the still lands, then a scan sweep while the gate looks it over. */}
           {running && !showThumb && <span className="media-skeleton" aria-hidden="true" />}
           {running && showThumb && reviewing && <span className="media-scan" aria-hidden="true" />}
@@ -72,8 +83,11 @@ function CineNodeImpl({ data, selected }) {
               : <span className="dot" style={{ background: qc ? verdictColor(qc.verdict) : statusColor(status) }} />}
           </span>
           {locked && <span className="shot-lock" title="Locked — regeneration skips this">🔒</span>}
-          {asset?.url && (
-            <span className="node-play">▶ {dur ? `${dur}s` : 'clip'}</span>
+          {isVid && !playing && (
+            <button className="node-play nodrag" title="Play clip"
+                    onClick={(e) => { e.stopPropagation(); setPlaying(true); }}>
+              ▶ {dur ? `${dur}s` : 'clip'}
+            </button>
           )}
         </div>
 
@@ -119,7 +133,7 @@ function CineNodeImpl({ data, selected }) {
     : kind === 'shot' ? (d.vo ? `“${d.vo}”` : d.coverage?.action)
     : '';
 
-  const mediaKinds = ['character', 'environment', 'keyframe', 'shot'];
+  const mediaKinds = ['character', 'environment', 'keyframe', 'shot', 'timeline'];
   const hasMedia = mediaKinds.includes(kind);
   // Founding references (the two sheets-stage nodes everything downstream inherits) wear a
   // pared-back face: thumb + a metadata signature strip, never the four detail layers.
@@ -164,7 +178,11 @@ function CineNodeImpl({ data, selected }) {
 
       {hasMedia && (
         <div className={`node-media ${showThumb ? '' : 'empty'} ${running ? 'working' : ''} ${reviewing ? 'reviewing' : ''}`}>
-          {showThumb && <img src={showThumb} alt={title} loading="lazy" draggable={false} />}
+          {playing && isVid
+            ? <video className="node-video nodrag" src={asset.url} poster={showThumb || undefined}
+                     autoPlay controls playsInline
+                     onClick={(e) => e.stopPropagation()} onEnded={() => setPlaying(false)} />
+            : showThumb && <img src={showThumb} alt={title} loading="lazy" draggable={false} />}
           {/* A shimmer skeleton holds the frame's shape until the first take lands; once a take
               is up, a scan sweep signals the gate is looking before its verdict pill appears. */}
           {running && !showThumb && <span className="media-skeleton" aria-hidden="true" />}
@@ -173,8 +191,11 @@ function CineNodeImpl({ data, selected }) {
             <span className="media-phase"><span className="spinner" />{phaseLabel(kind, phase)}</span>
           )}
           {!running && !showThumb && <span className="mono-label">no frame</span>}
-          {kind === 'shot' && asset?.url && (
-            <span className="node-play">▶ {asset.duration_sec ? `${asset.duration_sec}s` : 'shot'}</span>
+          {isVid && !playing && (
+            <button className="node-play nodrag" title={kind === 'timeline' ? 'Play film' : 'Play clip'}
+                    onClick={(e) => { e.stopPropagation(); setPlaying(true); }}>
+              ▶ {asset.duration_sec ? `${asset.duration_sec}s` : kind === 'timeline' ? 'film' : 'clip'}
+            </button>
           )}
           {/* On a keyframe the verdict belongs on the frame, not in a prose row below it — a
               floating pill over the master frame reads at a glance and keeps the card frame-first. */}
@@ -251,7 +272,7 @@ function CineNodeImpl({ data, selected }) {
             title="Re-animate this exact still with a different move — one clip, same frame"
             onClick={(e) => {
               e.stopPropagation();
-              data.onAddShot?.(n, { x: e.clientX, y: e.clientY });
+              data.onAddShot?.(n);
             }}
           >
             + Shot
@@ -267,7 +288,7 @@ function CineNodeImpl({ data, selected }) {
             title="Compose a new still at another angle of this scene, then animate it"
             onClick={(e) => {
               e.stopPropagation();
-              data.onAddKeyframe?.(n, { x: e.clientX, y: e.clientY });
+              data.onAddKeyframe?.(n);
             }}
           >
             + Keyframe

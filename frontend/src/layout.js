@@ -57,7 +57,7 @@ const SCENE_TILE_GAP_Y = 40;
 
 // Vertical breathing room between siblings.
 const KF_GAP = 46;                 // between frames of one scene
-const SCENE_GAP = 110;             // between scenes
+const SCENE_GAP = 72;              // between scenes
 const CAST_GAP = 54;               // between cast / location cards, in a grid row/col
 const CAST_GROUP_GAP = 46;         // between the cast frame and the locations frame
 
@@ -188,6 +188,7 @@ export function buildGraph(nodeList, { selectedId, impactIds, onAddShot, onAddKe
         y += SCENE_CARD_H + SCENE_GAP;
         continue;
       }
+      let firstFrameY = bandStart;
       frames.forEach((kf, fi) => {
         const shots = shotsOf.get(kf.node_id) || [];
         const n = Math.max(shots.length, 1);
@@ -196,7 +197,9 @@ export function buildGraph(nodeList, { selectedId, impactIds, onAddShot, onAddKe
         const bandH = Math.max(KF_CARD_H, gH);
         widestCols = Math.max(widestCols, cols);
 
-        pos.set(kf.node_id, { x: keyframeX, y: y + (bandH - KF_CARD_H) / 2 });
+        const kfY = y + (bandH - KF_CARD_H) / 2;
+        if (fi === 0) firstFrameY = kfY;
+        pos.set(kf.node_id, { x: keyframeX, y: kfY });
         const gridTop = y + (bandH - gH) / 2;
         shots.forEach((sh, i) => {
           pos.set(sh.node_id, {
@@ -217,7 +220,10 @@ export function buildGraph(nodeList, { selectedId, impactIds, onAddShot, onAddKe
         y += bandH;
         if (fi < frames.length - 1) y += KF_GAP;
       });
-      pos.set(s.node_id, { x: sceneX, y: bandStart + (y - bandStart - SCENE_CARD_H) / 2 });
+      // The scene heads its frame stack: its card top-aligns with its first frame, so the
+      // label reads as the title of the frames cascading below it rather than floating into
+      // the middle of a tall stack.
+      pos.set(s.node_id, { x: sceneX, y: firstFrameY });
       y += SCENE_GAP;
     }
     sceneH = ordered.length ? y - SCENE_GAP : 0;

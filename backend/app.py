@@ -37,7 +37,8 @@ def _is_public(path: str) -> bool:
             or path == "/api/gallery"
             or path.startswith("/api/media/")
             or path.startswith("/api/public/")
-            or path.endswith("/export/download"))
+            or path.endswith("/export/download")
+            or path.endswith("/export/film.mp4"))
 
 
 @app.middleware("http")
@@ -478,6 +479,16 @@ def download_export(project_id: str):
     if not f.exists():
         raise HTTPException(404, "no export rendered yet")
     return FileResponse(f, media_type="video/mp4", filename=f"{project_id}.mp4")
+
+
+@app.get("/api/projects/{project_id}/export/film.mp4")
+def stream_export(project_id: str):
+    """Same local cut, but for inline `<video>` playback on the Final Film node — served
+    without a download filename so the browser plays it in place rather than saving it."""
+    f = export.OUT_DIR / f"{project_id}.mp4"
+    if not f.exists():
+        raise HTTPException(404, "no export rendered yet")
+    return FileResponse(f, media_type="video/mp4")
 
 
 # ---- library ----------------------------------------------------------------

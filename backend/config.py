@@ -74,7 +74,11 @@ class Config:
     # QC — the review agent. It looks at pixels, so it needs a vision-capable model of its
     # own: the planner's model may be text-only (llama-3.3-70b on GMI is), and a judge that
     # can't see would silently degrade into rubber-stamping every frame.
-    QC_MODEL = os.getenv("QC_MODEL", "gpt-4o")
+    # Default to a vision-capable slug for the active stack. GMICloud namespaces its ids and
+    # 404s the bare `gpt-4o`, so the Backblaze stack points QC at a GMI multimodal model
+    # (Claude Sonnet sees) — no OpenAI key required for the judge to actually look.
+    QC_MODEL = os.getenv("QC_MODEL") or (
+        "anthropic/claude-sonnet-4.5" if PROVIDER_STACK == "gmicloud" else "gpt-4o")
     QC_MAX_REGENS = int(os.getenv("QC_MAX_REGENS", "2"))
     # A re-animation costs minutes and real money where a re-frame costs cents, so the
     # video gate gets a tighter budget than the still gate.
@@ -110,11 +114,13 @@ class Config:
     def can_see(cls) -> bool:
         """Whether QC can actually look at an image.
 
-        Vision goes over the OpenAI-compatible multimodal wire format, so it needs a key
-        that speaks it. Without one QC still runs — it just says so in the report instead
-        of pretending to have looked.
+        Vision goes over the OpenAI-compatible multimodal wire format, which both OpenAI and
+        GMICloud speak — GMICloud's chat catalog carries vision-capable models, so a GMI key
+        alone is enough (with a vision QC_MODEL). Without any such key QC still runs — it just
+        says so in the report instead of pretending to have looked. A vision model that ignores
+        the images degrades to an unreadable reply → SKIPPED, never a false PASS.
         """
-        return bool(cls.OPENAI_API_KEY)
+        return bool(cls.OPENAI_API_KEY or cls.GMI_API_KEY)
 
     @classmethod
     def mock_media(cls) -> bool:

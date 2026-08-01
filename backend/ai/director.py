@@ -35,6 +35,7 @@ from .. import models
 from ..models import (Project, Node, NodeKind, NodeStatus, Asset, QCReference,
                       StageEvent, StageRecord, StageStatus, SHOT_SECONDS)
 from ..pipeline import genblaze_client as gb
+from ..pipeline import export
 from . import story as story_agent
 from . import camera
 from . import coverage
@@ -688,7 +689,33 @@ def _assemble(project: Project) -> Iterator[StageEvent]:
         timeline = project.add(Node(kind=NodeKind.TIMELINE, title="Final Film",
                                     status=NodeStatus.READY, parent_ids=ids,
                                     data={"shots": ids}))
+
+    # Stitch the surviving clips into one film and hang it on this node, so the last card on
+    # the canvas *is* the deliverable — it plays the whole cut, not a shot count. Non-fatal:
+    # without ffmpeg (or if a transcode fails) the node stays a metadata summary and the run
+    # continues.
+    if export.ffmpeg_available():
+        yield _ev(label="Stitching the final cut…", project_id=pid)
+        _stitch(project, timeline)
+
     yield _ev(type="node", node=timeline, project_id=pid)
+
+
+def _stitch(project: Project, timeline: Node) -> None:
+    """Cut the shots into one MP4 and attach it as the timeline's asset."""
+    try:
+        url = export.export_film(project)
+    except export.ExportError:
+        return
+    # Inline playback needs a video-looking URL and no bearer header (a <video> src can't send
+    # one). The B2 URL already ends .mp4; the local fallback gets the sibling inline route.
+    play = url if url.endswith(".mp4") else f"/api/projects/{project.project_id}/export/film.mp4"
+    # Size the runtime off the shots actually in the cut, not every shot node — a failed or
+    # unrendered shot is in data["shots"] but never makes it into the film.
+    cut = export.ordered_shots(project)
+    poster = next((s.asset.thumbnail for s in cut if s.asset), None)
+    timeline.asset = Asset(kind=NodeKind.TIMELINE, url=play, thumbnail=poster,
+                           duration_sec=len(cut) * SHOT_SECONDS)
 
 
 STAGES = {
@@ -1016,7 +1043,17 @@ def _regen(project: Project, node_id: str, note: str | None = None, skip=None) -
         node, node.kind, generate, _target_for(project, node, note), budget, pid)
     _settle(node, asset, report, base + attempt, note=note)
     yield _ev(type="node", node=node, project_id=pid)
-    yield from _mark_downstream_stale(project, node, skip)
+
+    if node.kind == NodeKind.KEYFRAME:
+        # A shot is a direct animation of this exact still, so a re-framed keyframe leaves each
+        # clip animating the frame it replaced. Re-shoot them in place — the regen panel already
+        # promises this ("re-renders N downstream") — except any the director kept this pass.
+        # (_regen on a shot stales the cut on its way out; regenerate_node re-stitches it.)
+        for shot in project.children_of(node.node_id):
+            if shot.kind == NodeKind.SHOT and shot.node_id not in skip:
+                yield from _regen(project, shot.node_id, note, skip)
+    else:
+        yield from _mark_downstream_stale(project, node, skip)
 
 
 def regenerate_node(project: Project, node_id: str, note: str | None = None,
@@ -1030,7 +1067,15 @@ def regenerate_node(project: Project, node_id: str, note: str | None = None,
     the canvas never disagree about how much of the film still stands.
     """
     node = project.get(node_id)
+    skip = skip or ()
     yield from _regen(project, node_id, note, skip)
+    # The final cut is downstream of every clip, so any regen that re-rendered shots (a shot, a
+    # keyframe cascading into its shots, or a scene) leaves it stale. Re-stitch it here so the
+    # film reflects the change at once — unless the director kept the Final Film this pass.
+    if node and node.kind in (NodeKind.SHOT, NodeKind.KEYFRAME, NodeKind.SCENE):
+        timeline = next((n for n in project.by_kind(NodeKind.TIMELINE)), None)
+        if timeline and timeline.node_id not in skip:
+            yield from _assemble(project)
     for rec in resync_stages(project):
         yield _stage_ev(rec, project.project_id)
     yield _ev(type="done", label=f"{node.title} is back." if node else "Nothing to regenerate.",

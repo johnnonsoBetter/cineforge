@@ -375,13 +375,17 @@ def chat(system: str, user: str, *, json_mode: bool = False, temperature: float 
     except ImportError:
         pass  # not installed yet — fall through to the direct wire call
 
-    # 2) Direct OpenAI-compatible call. Vision pins to OpenAI: the GMI text model can't see,
-    #    and a judge silently answering from the brief alone is worse than no judge.
+    # 2) Direct OpenAI-compatible call. Both OpenAI and GMICloud speak the multimodal wire,
+    #    so vision routes to whichever key we have rather than pinning to OpenAI: GMICloud's
+    #    chat catalog carries vision-capable models (Claude, GPT-4o, Gemini), so the judge on
+    #    the Backblaze stack can see without an OpenAI key. The caller pins the model
+    #    (QC_MODEL); for GMI that must be a namespaced vision slug or the frames come back
+    #    unseen — which surfaces as an unreadable reply (SKIPPED), not a rubber-stamped PASS.
     import os
-    if (prefer_openai or image_urls) and cfg.OPENAI_API_KEY:
+    if prefer_openai and cfg.OPENAI_API_KEY:
         base = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
         key, model = cfg.OPENAI_API_KEY, model or cfg.CHAT_MODEL
-    elif cfg.GMI_API_KEY and not image_urls:
+    elif cfg.GMI_API_KEY:
         base = os.getenv("GMI_BASE_URL", "https://api.gmi-serving.com/v1")
         key = cfg.GMI_API_KEY
         model = model or cfg.GMI_CHAT_MODEL
