@@ -80,7 +80,10 @@ function CineNodeImpl({ data, selected }) {
           <span className="shot-badge" title={qc ? verdictLabel(qc.verdict) : STATUS_LABEL[status] || status}>
             {running
               ? <span className="spinner" />
-              : <span className="dot" style={{ background: qc ? verdictColor(qc.verdict) : statusColor(status) }} />}
+              : <span className="dot" style={{
+                  background: qc ? verdictColor(qc.verdict) : statusColor(status),
+                  color: qc ? verdictColor(qc.verdict) : statusColor(status),
+                }} />}
           </span>
           {locked && <span className="shot-lock" title="Locked — regeneration skips this">🔒</span>}
           {isVid && !playing && (
@@ -151,6 +154,15 @@ function CineNodeImpl({ data, selected }) {
   return (
     <div className={`node node-${kind} ${status} ${selected ? 'selected' : ''} ${locked ? 'locked' : ''}`}>
       <Handle type="target" position={Position.Left} />
+      {/* Floating corner state light — verdict if the gate has ruled, else render status. */}
+      <span
+        className="node-status-dot"
+        title={qc ? verdictLabel(qc.verdict) : STATUS_LABEL[status] || status}
+        style={{
+          background: qc ? verdictColor(qc.verdict) : statusColor(status),
+          color: qc ? verdictColor(qc.verdict) : statusColor(status),
+        }}
+      />
       {/* Re-emits as a contextmenu event so the button and right-click share one code path
           — React Flow's onNodeContextMenu picks it up as it bubbles. */}
       <button
@@ -178,7 +190,7 @@ function CineNodeImpl({ data, selected }) {
           <>
             {locked && <span className="node-lock" title="Locked — regeneration skips this">🔒</span>}
             <span className="node-status" style={{ color: statusColor(status) }}>
-              {running ? <span className="spinner" /> : <span className="dot" style={{ background: statusColor(status) }} />}
+              {running && <span className="spinner" />}
               {STATUS_LABEL[status] || status}
             </span>
           </>

@@ -1,6 +1,26 @@
 /* CineForge — warm near-black studio surface, gold accent, serif display.
    Palette and type sampled from Design.pdf. */
 
+/* Landing-only button/input reset. The app omits Tailwind Preflight (to protect
+   the Studio), so bare <button>s in the ported landing render with native grey
+   chrome. Scoped to .cf-landing and placed BEFORE @tailwind utilities and the
+   component classes below, so any intended bg (utilities, .glass, .btn-primary)
+   still wins the cascade. :where() keeps specificity low. */
+.cf-landing :where(button) {
+  -webkit-appearance: none;
+  appearance: none;
+  background-color: transparent;
+  background-image: none;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  line-height: inherit;
+  color: inherit;
+  text-align: inherit;
+  cursor: pointer;
+}
+
 @tailwind utilities;
 
 :root {
@@ -76,14 +96,14 @@ button:disabled { cursor: default; }
   gap: 6px;
   height: 25px;
   padding: 0 10px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
+  border: 1px solid rgba(228, 165, 85, 0.14);
+  border-radius: 7px;
   font-family: var(--mono);
   font-size: 10px;
   letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--muted);
-  background: transparent;
+  background: rgba(255, 255, 255, 0.03);
   white-space: nowrap;
 }
 
@@ -92,25 +112,26 @@ button:disabled { cursor: default; }
 .btn {
   height: 31px;
   padding: 0 13px;
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  background: transparent;
+  border: 1px solid rgba(228, 165, 85, 0.14);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
   color: var(--cream);
   font-size: 13px;
   transition: background 0.15s, border-color 0.15s, color 0.15s;
 }
-.btn:hover:not(:disabled) { background: var(--surface-2); border-color: var(--line-strong); }
-.btn:disabled { color: var(--faint); border-color: #332a20; }
+.btn:hover:not(:disabled) { background: rgba(228, 165, 85, 0.09); border-color: rgba(228, 165, 85, 0.34); }
+.btn:disabled { color: var(--faint); border-color: #332a20; background: transparent; }
 
 .btn-gold {
   border: none;
-  background: var(--gold);
+  background: linear-gradient(135deg, #e4a555, #b0762c);
   color: #2a1f0f;
   font-weight: 600;
   border-radius: 9px;
-  transition: filter 0.15s, transform 0.1s;
+  box-shadow: 0 6px 20px rgba(228, 165, 85, 0.2);
+  transition: filter 0.15s, transform 0.1s, box-shadow 0.15s;
 }
-.btn-gold:hover:not(:disabled) { filter: brightness(1.08); }
+.btn-gold:hover:not(:disabled) { filter: brightness(1.06); box-shadow: 0 8px 26px rgba(228, 165, 85, 0.3); }
 .btn-gold:active:not(:disabled) { transform: translateY(1px); }
 .btn-gold:disabled { background: #5d4c31; color: #8d7c60; }
 
@@ -125,8 +146,11 @@ button:disabled { cursor: default; }
   height: var(--topbar-h);
   flex: none;
   padding: 0 16px 0 0;
-  background: var(--bg-topbar);
-  border-bottom: 1px solid var(--line);
+  /* Frosted shell bar — matches the landing navbar's glass treatment. */
+  background: rgba(28, 22, 14, 0.62);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border-bottom: 1px solid rgba(228, 165, 85, 0.12);
   z-index: 20;
 }
 
@@ -138,7 +162,17 @@ button:disabled { cursor: default; }
   flex: none;
   height: 100%;
   padding: 0 20px;
-  border-right: 1px solid var(--line);
+  border-right: 1px solid rgba(228, 165, 85, 0.1);
+}
+/* Gradient logo mark, echoing the landing navbar's clapperboard chip. */
+.brand::before {
+  content: "";
+  align-self: center;
+  width: 30px; height: 30px;
+  flex: none;
+  border-radius: 9px;
+  background: linear-gradient(135deg, #f0c079, #b0762c);
+  box-shadow: 0 4px 14px rgba(228, 165, 85, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.28);
 }
 /* Empty state has no rail beneath it, so the brand shouldn't reserve the rail column or
    draw the divider that used to meet its edge — it sits as its own label instead. */
@@ -166,8 +200,9 @@ button:disabled { cursor: default; }
 .zoomer {
   display: flex;
   align-items: center;
-  border: 1px solid var(--line);
-  border-radius: 7px;
+  border: 1px solid rgba(228, 165, 85, 0.14);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
   height: 31px;
   overflow: hidden;
 }
@@ -176,7 +211,7 @@ button:disabled { cursor: default; }
   border: none; background: transparent;
   color: var(--text); font-size: 15px; line-height: 1;
 }
-.zoomer button:hover:not(:disabled) { background: var(--surface-2); color: var(--gold); }
+.zoomer button:hover:not(:disabled) { background: rgba(228, 165, 85, 0.09); color: var(--gold); }
 .zoomer span {
   min-width: 46px; text-align: center;
   font-family: var(--mono); font-size: 11px; color: var(--text);
@@ -191,12 +226,15 @@ button:disabled { cursor: default; }
   flex: none;
   display: flex;
   flex-direction: column;
-  background: var(--bg);
-  border-right: 1px solid var(--line);
+  /* Frosted conversational column — same warm glass family as the shell and inspector. */
+  background: rgba(26, 21, 14, 0.66);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border-right: 1px solid rgba(228, 165, 85, 0.1);
   min-height: 0;
 }
 
-.rail-head { padding: 15px 20px 14px; border-bottom: 1px solid var(--line); flex: none; }
+.rail-head { padding: 15px 20px 14px; border-bottom: 1px solid rgba(228, 165, 85, 0.1); flex: none; }
 .rail-head-title { font-family: var(--serif); font-style: italic; font-size: 15px; color: var(--muted); margin-top: 4px; }
 
 .rail-log {
@@ -257,7 +295,7 @@ button:disabled { cursor: default; }
   padding: 2px;
 }
 
-.rail-foot { flex: none; border-top: 1px solid var(--line); padding: 14px 20px 16px; }
+.rail-foot { flex: none; border-top: 1px solid rgba(228, 165, 85, 0.1); padding: 14px 20px 16px; }
 
 .target-chip {
   display: flex;
@@ -480,13 +518,16 @@ button:disabled { cursor: default; }
   display: flex;
   align-items: flex-end;
   gap: 8px;
-  border: 1px solid var(--line);
-  border-radius: 13px;
-  background: var(--surface);
+  border: 1px solid rgba(228, 165, 85, 0.16);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.03);
   padding: 9px 9px 9px 14px;
-  transition: border-color 0.15s;
+  transition: border-color 0.15s, box-shadow 0.15s;
 }
-.composer:focus-within { border-color: var(--line-strong); }
+.composer:focus-within {
+  border-color: rgba(228, 165, 85, 0.4);
+  box-shadow: 0 0 0 3px rgba(228, 165, 85, 0.08);
+}
 .composer:has(textarea:disabled) { opacity: 0.72; }
 .composer textarea {
   flex: 1;
@@ -510,7 +551,7 @@ button:disabled { cursor: default; }
   font-size: 15px; line-height: 1;
   transition: background 0.15s, color 0.15s;
 }
-.composer-send.on { background: var(--gold); color: #2a1f0f; }
+.composer-send.on { background: linear-gradient(135deg, #e4a555, #b0762c); color: #2a1f0f; box-shadow: 0 4px 14px rgba(228, 165, 85, 0.24); }
 .composer-send.on:hover { filter: brightness(1.08); }
 .composer-send:focus-visible, .composer-at:focus-visible,
 .proposal button:focus-visible, .proposal-edit:focus-visible {
@@ -521,7 +562,19 @@ button:disabled { cursor: default; }
 
 /* ---------- stage / canvas area ---------- */
 
-.stage { position: relative; flex: 1; min-width: 0; background: var(--bg-canvas); }
+.stage {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  /* A faint warm grid under the (transparent) flow pane — the graph floats on ruled paper
+     rather than a flat fill, matching the landing graph explorer. The dotted Background layer
+     from React Flow rides on top of this. */
+  background-color: var(--bg-canvas);
+  background-image:
+    linear-gradient(rgba(228, 165, 85, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(228, 165, 85, 0.035) 1px, transparent 1px);
+  background-size: 46px 46px;
+}
 
 .stage::after {
   content: "";
@@ -662,36 +715,70 @@ button:disabled { cursor: default; }
   width: 6px; height: 6px;
   background: var(--gold-dim);
   border: none;
-  opacity: 0.55;
+  opacity: 0;
+  transition: opacity 0.16s ease;
 }
-.react-flow__edge-path { stroke: rgba(228, 165, 85, 0.22); stroke-width: 1.4px; }
+.react-flow__node:hover .react-flow__handle { opacity: 0.5; }
+.react-flow__edge-path { stroke: rgba(228, 165, 85, 0.28); stroke-width: 1.4px; }
 .react-flow__edge.stale .react-flow__edge-path { stroke: rgba(215, 155, 74, 0.3); stroke-dasharray: 4 4; }
 .react-flow__edge.live .react-flow__edge-path { stroke: rgba(228, 165, 85, 0.65); stroke-width: 1.8px; }
 .react-flow__node { cursor: pointer; }
 
 .react-flow__minimap {
-  background: rgba(28, 24, 19, 0.9) !important;
-  border: 1px solid var(--line);
-  border-radius: 9px;
+  background: rgba(28, 22, 14, 0.72) !important;
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(228, 165, 85, 0.16);
+  border-radius: 12px;
   overflow: hidden;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
 }
-.react-flow__minimap-mask { fill: rgba(20, 17, 13, 0.6); }
+.react-flow__minimap-mask { fill: rgba(10, 8, 5, 0.66); }
+
+/* Zoom controls — glass, rounded, warm; mirrors the landing graph explorer. */
+.react-flow__controls {
+  background: rgba(28, 22, 14, 0.6) !important;
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(228, 165, 85, 0.16) !important;
+  border-radius: 12px !important;
+  overflow: hidden;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+.react-flow__controls-button {
+  background: transparent !important;
+  border-bottom: 1px solid rgba(228, 165, 85, 0.1) !important;
+  width: 28px !important; height: 28px !important;
+}
+.react-flow__controls-button:hover { background: rgba(228, 165, 85, 0.08) !important; }
+.react-flow__controls-button svg { fill: #b6a88f; }
 
 /* ---------- node cards ---------- */
 
 .node {
   width: 266px;
-  border: 1px solid var(--line);
-  border-radius: 13px;
-  background: var(--surface);
+  /* Glass tile floating over the grid — the warm ring + frosted fill match the landing graph
+     explorer's cards. The frost only shows through the card chrome (header/body); media stays
+     opaque. */
+  border: 1px solid rgba(228, 165, 85, 0.16);
+  border-radius: 14px;
+  /* Frosted, but kept opaque enough that dense card content stays legible over the grid. */
+  background: rgba(43, 37, 30, 0.78);
+  backdrop-filter: blur(28px);
+  -webkit-backdrop-filter: blur(28px);
+  box-shadow: 0 10px 34px rgba(0, 0, 0, 0.38), inset 0 1px 0 rgba(255, 255, 255, 0.05);
   overflow: hidden;
   animation: bloom 0.62s cubic-bezier(0.16, 0.9, 0.24, 1);
   transition: border-color 0.18s, box-shadow 0.18s, transform 0.18s;
 }
-.node:hover { border-color: var(--line-strong); transform: translateY(-1px); }
+.node:hover {
+  border-color: rgba(228, 165, 85, 0.34);
+  transform: translateY(-1px);
+  box-shadow: 0 14px 42px rgba(0, 0, 0, 0.42), 0 0 24px rgba(228, 165, 85, 0.08);
+}
 .node.selected {
   border-color: var(--gold);
-  box-shadow: 0 0 0 1px var(--gold), 0 10px 34px rgba(0, 0, 0, 0.45), 0 0 26px rgba(228, 165, 85, 0.14);
+  box-shadow: 0 0 0 1px var(--gold), 0 16px 48px rgba(0, 0, 0, 0.5), 0 0 34px rgba(228, 165, 85, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.06);
 }
 .node.running { border-color: rgba(228, 165, 85, 0.5); animation: bloom 0.62s cubic-bezier(0.16, 0.9, 0.24, 1), breathe 1.9s ease-in-out 0.62s infinite; }
 .node.stale { border-color: rgba(215, 155, 74, 0.35); }
@@ -750,18 +837,40 @@ button:disabled { cursor: default; }
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 10px 12px 9px;
+  /* Extra right padding clears the floating corner status dot. */
+  padding: 10px 22px 9px 12px;
   /* Stage-tinted label band — the signal that reads even at canvas zoom. */
   background: color-mix(in srgb, var(--stage, transparent) 15%, transparent);
   border-bottom: 1px solid color-mix(in srgb, var(--stage, var(--line)) 34%, var(--line));
 }
-.node-kind { display: flex; align-items: center; gap: 7px; flex: 1; font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.18em; text-transform: uppercase; color: color-mix(in srgb, var(--stage, var(--muted)) 62%, var(--muted)); }
+.node-kind { display: flex; align-items: center; gap: 8px; flex: 1; font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.18em; text-transform: uppercase; color: color-mix(in srgb, var(--stage, var(--muted)) 62%, var(--muted)); }
+/* Rounded gradient chip — the landing explorer's icon-chip signature, tinted per stage. */
 .node-kind::before {
   content: "";
-  width: 7px; height: 7px; flex: none;
-  border-radius: 2px;
-  background: var(--stage, var(--gold-dim));
+  width: 16px; height: 16px; flex: none;
+  border-radius: 5px;
+  background: linear-gradient(135deg,
+    color-mix(in srgb, var(--stage, var(--gold)) 92%, white),
+    color-mix(in srgb, var(--stage, var(--gold-dim)) 88%, black));
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.18);
 }
+
+/* Floating corner status dot — the glanceable state light, mirrored from the landing cards.
+   Carries the render/verdict colour so the header status text stays a quiet label. Yields to
+   the ⋯ actions button on hover. */
+.node-status-dot {
+  position: absolute;
+  top: 9px; right: 8px;
+  z-index: 3;
+  width: 9px; height: 9px;
+  border-radius: 50%;
+  background: var(--gold-dim);
+  box-shadow: 0 0 0 3px rgba(20, 16, 12, 0.55), 0 0 8px currentColor;
+  color: var(--gold-dim);
+  transition: opacity 0.15s ease;
+}
+.node:hover .node-status-dot { opacity: 0; }
+.node.running .node-status-dot { animation: breathe 1.9s ease-in-out infinite; }
 .node-status { display: flex; align-items: center; gap: 5px; font-family: var(--mono); font-size: 9px; letter-spacing: 0.1em; text-transform: uppercase; }
 
 .node-media {
@@ -893,21 +1002,39 @@ button.node-play:hover { background: rgba(20, 16, 12, 0.92); }
    caption under it. No header band, no stats grid, no verdict prose — the frame runs edge to
    edge and the two lines below say which setup it is and, only if the gate flagged it, what. */
 .shot-card .node-media { border-top: none; aspect-ratio: 16 / 9; }
+/* A frame-edge scrim so the on-frame status light, lock and play badge read on any thumbnail. */
+.shot-card .node-media::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(180deg, rgba(12, 9, 6, 0.42), transparent 22%),
+    linear-gradient(0deg, rgba(12, 9, 6, 0.4), transparent 26%);
+}
 .shot-badge {
   position: absolute;
-  top: 8px; left: 8px;
+  top: 9px; left: 9px;
+  z-index: 2;
   display: flex; align-items: center; justify-content: center;
-  width: 18px; height: 18px;
+  width: 16px; height: 16px;
   border-radius: 50%;
-  background: rgba(20, 16, 12, 0.78);
-  backdrop-filter: blur(3px);
+  background: rgba(16, 12, 8, 0.72);
+  border: 1px solid rgba(228, 165, 85, 0.18);
+  backdrop-filter: blur(4px);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
 }
-.shot-lock { position: absolute; top: 8px; left: 30px; font-size: 10px; opacity: 0.85; }
+/* The status light glows in its own colour — a small REC-style indicator on the clip. */
+.shot-badge .dot { box-shadow: 0 0 7px currentColor; }
+.node.running .shot-badge { border-color: rgba(228, 165, 85, 0.4); }
+.shot-lock { position: absolute; top: 9px; left: 31px; z-index: 2; font-size: 10px; opacity: 0.9; }
 .shot-foot {
   display: flex;
   flex-direction: column;
   gap: 3px;
   padding: 9px 11px 10px;
+  border-top: 1px solid rgba(228, 165, 85, 0.08);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.015), transparent);
 }
 .shot-foot-top { display: flex; align-items: baseline; gap: 8px; }
 .shot-foot .node-title {
@@ -1172,38 +1299,108 @@ button.node-play:hover { background: rgba(20, 16, 12, 0.92); }
 
 /* ---------- inspector ---------- */
 
+/* Floating frosted glass card — mirrors the landing graph explorer's inspector: inset from the
+   canvas edges, rounded, warm-ringed, with the graph grid softly visible through the frost. */
 .inspector {
   position: absolute;
-  top: 0; right: 0; bottom: 0;
-  width: 388px;
+  top: 14px; right: 14px; bottom: 14px;
+  /* Width is user-driven: App sets --inspector-w from the resize drag (or the collapsed spine). */
+  width: var(--inspector-w, 382px);
   display: flex;
   flex-direction: column;
-  background: var(--bg-topbar);
-  border-left: 1px solid var(--line);
+  background: rgba(28, 22, 14, 0.66);
+  backdrop-filter: blur(40px);
+  -webkit-backdrop-filter: blur(40px);
+  border: 1px solid rgba(228, 165, 85, 0.16);
+  border-radius: 18px;
+  overflow: hidden;
   z-index: 14;
-  box-shadow: -22px 0 48px rgba(0, 0, 0, 0.38);
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.05);
   animation: slide-in 0.28s cubic-bezier(0.2, 0.8, 0.25, 1);
 }
 
+/* Left-edge drag handle for resizing. Invisible until hovered, then a warm seam. */
+.insp-resize {
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 9px;
+  cursor: ew-resize;
+  z-index: 5;
+}
+.insp-resize::before {
+  content: "";
+  position: absolute;
+  left: 2px; top: 50%; transform: translateY(-50%);
+  width: 3px; height: 46px;
+  border-radius: 3px;
+  background: rgba(228, 165, 85, 0.25);
+  opacity: 0;
+  transition: opacity 0.16s ease, background 0.16s ease;
+}
+.insp-resize:hover::before { opacity: 1; }
+.insp-resize:active::before { opacity: 1; background: var(--gold); box-shadow: 0 0 10px rgba(228, 165, 85, 0.6); }
+
+.insp-head-btns { display: flex; align-items: center; gap: 7px; }
+
+/* Collapsed spine — a thin vertical reopen control. */
+.inspector.collapsed {
+  padding: 0;
+  background: rgba(28, 22, 14, 0.6);
+}
+.insp-reopen {
+  width: 100%; height: 100%;
+  display: flex; flex-direction: column; align-items: center; gap: 12px;
+  padding: 14px 0;
+  border: none; background: transparent; cursor: pointer;
+  color: var(--muted);
+  transition: color 0.16s ease, background 0.16s ease;
+}
+.insp-reopen:hover { color: var(--cream); background: rgba(228, 165, 85, 0.05); }
+.insp-reopen-chip { width: 24px; height: 24px; border-radius: 8px; }
+.insp-reopen-label {
+  writing-mode: vertical-rl;
+  font-family: var(--mono); font-size: 10px; letter-spacing: 0.22em; text-transform: uppercase;
+}
+.insp-reopen-arrow { margin-top: auto; font-size: 16px; line-height: 1; }
+
 .insp-head {
   display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  padding: 15px 16px 14px;
-  border-bottom: 1px solid var(--line);
+  flex-direction: column;
+  gap: 14px;
+  padding: 15px 16px 15px;
+  border-bottom: 1px solid rgba(228, 165, 85, 0.1);
   flex: none;
 }
-.insp-head h2 { margin: 5px 0 0; font-family: var(--serif); font-size: 19px; font-weight: 400; color: var(--cream); line-height: 1.25; }
-.insp-close {
-  width: 27px; height: 27px; flex: none;
-  border: 1px solid var(--line); border-radius: 7px;
-  background: transparent; color: var(--muted); font-size: 14px; line-height: 1;
+/* Row 1: the "Inspector" eyebrow + close, like the demo's top bar. */
+.insp-eyebrow { display: flex; align-items: center; justify-content: space-between; }
+.insp-eyebrow .mono-label { letter-spacing: 0.22em; }
+/* Row 2: gradient icon chip + serif title/kind + status. */
+.insp-ident { display: flex; align-items: center; gap: 12px; }
+.insp-chip {
+  flex: none;
+  width: 38px; height: 38px;
+  border-radius: 11px;
+  background: linear-gradient(135deg,
+    color-mix(in srgb, var(--stage, var(--gold)) 92%, white),
+    color-mix(in srgb, var(--stage, var(--gold-dim)) 88%, black));
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.22);
 }
-.insp-close:hover { color: var(--cream); border-color: var(--line-strong); }
+.insp-ident-text { flex: 1; min-width: 0; }
+.insp-head h2 { margin: 3px 0 0; font-family: var(--serif); font-size: 20px; font-weight: 400; color: var(--cream); line-height: 1.2; }
+.insp-close {
+  width: 28px; height: 28px; flex: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid rgba(228, 165, 85, 0.12);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--muted); font-size: 13px; line-height: 1;
+  transition: color 0.16s ease, border-color 0.16s ease, background 0.16s ease;
+}
+.insp-close:hover { color: var(--cream); border-color: var(--line-strong); background: rgba(228, 165, 85, 0.08); }
 
 .insp-scroll { flex: 1; min-height: 0; overflow-y: auto; }
 
-.insp-preview { background: #16130f; border-bottom: 1px solid var(--line); }
+.insp-preview { background: #16130f; border-bottom: 1px solid rgba(228, 165, 85, 0.1); }
 .insp-preview img { width: 100%; display: block; aspect-ratio: 16 / 9; object-fit: cover; background: #16130f; }
 /* The founding character sheet is a full multi-view reference — show it whole (its own aspect),
    never cropped into the 16/9 frame the way a single rendered shot is. */
@@ -1212,8 +1409,8 @@ button.node-play:hover { background: rgba(20, 16, 12, 0.92); }
 .insp-tabs {
   flex: none;
   display: flex;
-  background: var(--bg-topbar);
-  border-bottom: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.015);
+  border-bottom: 1px solid rgba(228, 165, 85, 0.1);
   overflow-x: auto;
   scrollbar-width: none;
 }
@@ -1223,19 +1420,34 @@ button.node-play:hover { background: rgba(20, 16, 12, 0.92); }
      bar scroll once a rich node (scene, entity) has more than fit across 388px. */
   flex: 1 0 auto;
   white-space: nowrap;
+  position: relative;
   display: inline-flex; align-items: center; justify-content: center; gap: 6px;
-  padding: 11px 12px;
+  padding: 12px 12px;
   border: none; border-bottom: 2px solid transparent;
   background: transparent;
   color: var(--muted);
-  font-family: var(--mono); font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase;
+  font-family: var(--mono); font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase;
   cursor: pointer;
+  transition: color 0.16s ease, background 0.16s ease;
 }
-.insp-tab:hover { color: var(--cream); }
-.insp-tab.active { color: var(--gold); border-bottom-color: var(--gold); }
-.insp-tab-dot { width: 6px; height: 6px; border-radius: 50%; flex: none; }
+.insp-tab:hover { color: var(--cream); background: rgba(255, 255, 255, 0.02); }
+.insp-tab.active {
+  color: var(--gold);
+  border-bottom-color: var(--gold);
+  background: linear-gradient(180deg, transparent, rgba(228, 165, 85, 0.07));
+}
+/* Soft glow riding the active underline. */
+.insp-tab.active::after {
+  content: "";
+  position: absolute;
+  left: 12px; right: 12px; bottom: -2px;
+  height: 2px;
+  background: var(--gold);
+  box-shadow: 0 0 10px rgba(228, 165, 85, 0.6);
+}
+.insp-tab-dot { width: 6px; height: 6px; border-radius: 50%; flex: none; box-shadow: 0 0 6px currentColor; }
 
-.insp-section { padding: 15px 16px; border-bottom: 1px solid var(--line); }
+.insp-section { padding: 15px 16px; border-bottom: 1px solid rgba(228, 165, 85, 0.08); }
 .insp-section h3 { margin: 0 0 11px; font-family: var(--mono); font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--muted); font-weight: 400; }
 
 .kv { display: flex; gap: 12px; padding: 5px 0; font-size: 12.5px; line-height: 1.5; }
@@ -1250,9 +1462,9 @@ button.node-play:hover { background: rgba(20, 16, 12, 0.92); }
   font-size: 11px;
   line-height: 1.65;
   color: var(--text);
-  background: #1d1914;
-  border: 1px solid #362e25;
-  border-radius: 8px;
+  background: rgba(12, 9, 6, 0.5);
+  border: 1px solid rgba(228, 165, 85, 0.12);
+  border-radius: 9px;
   padding: 11px 12px;
   max-height: 180px;
   overflow-y: auto;
@@ -1260,10 +1472,16 @@ button.node-play:hover { background: rgba(20, 16, 12, 0.92); }
   overflow-wrap: anywhere;
 }
 
-.hashline { display: flex; align-items: center; gap: 8px; }
+.hashline {
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 9px;
+  border-radius: 8px;
+  background: rgba(12, 9, 6, 0.4);
+  border: 1px solid rgba(228, 165, 85, 0.1);
+}
 .hashline code { flex: 1; font-family: var(--mono); font-size: 11px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.copy-btn { border: 1px solid var(--line); border-radius: 5px; background: transparent; color: var(--muted); font-family: var(--mono); font-size: 9px; letter-spacing: 0.1em; padding: 3px 7px; text-transform: uppercase; flex: none; }
-.copy-btn:hover { color: var(--gold); border-color: var(--line-strong); }
+.copy-btn { border: 1px solid rgba(228, 165, 85, 0.16); border-radius: 6px; background: rgba(255, 255, 255, 0.03); color: var(--muted); font-family: var(--mono); font-size: 9px; letter-spacing: 0.1em; padding: 3px 8px; text-transform: uppercase; flex: none; transition: color 0.15s, border-color 0.15s, background 0.15s; }
+.copy-btn:hover { color: var(--gold); border-color: rgba(228, 165, 85, 0.4); background: rgba(228, 165, 85, 0.08); }
 
 .drawer-toggle {
   width: 100%;
@@ -1297,7 +1515,8 @@ button.node-play:hover { background: rgba(20, 16, 12, 0.92); }
   animation: rise 0.4s cubic-bezier(0.2, 0.8, 0.25, 1);
   transition: right 0.28s cubic-bezier(0.2, 0.8, 0.25, 1);
 }
-.timeline.with-inspector { right: 404px; }
+/* Follows the inspector's live width (and its 14px inset) so the two never overlap. */
+.timeline.with-inspector { right: calc(var(--inspector-w, 382px) + 22px); }
 
 .tl-head { display: flex; align-items: center; gap: 12px; padding: 10px 14px 9px; }
 .tl-title { font-family: var(--serif); font-style: italic; font-size: 15px; color: var(--cream); }
@@ -2220,12 +2439,16 @@ button.node-play:hover { background: rgba(20, 16, 12, 0.92); }
 .qc-verdict {
   font-family: var(--mono);
   font-size: 10px;
+  font-weight: 600;
   letter-spacing: 0.12em;
   text-transform: uppercase;
   border: 1px solid currentColor;
   border-radius: 999px;
-  padding: 2px 9px;
+  padding: 3px 10px;
   white-space: nowrap;
+  /* Tinted glass fill in the verdict's own colour — PASS reads as a green pill, not an outline. */
+  background: color-mix(in srgb, currentColor 15%, transparent);
+  box-shadow: inset 0 0 12px color-mix(in srgb, currentColor 10%, transparent);
 }
 
 .qc-headline { flex: 1; font-size: 12.5px; color: var(--muted); }
@@ -2241,11 +2464,11 @@ button.node-play:hover { background: rgba(20, 16, 12, 0.92); }
 /* A mock or skipped review is not evidence of quality — it must never read like a pass. */
 .qc-warn {
   margin-top: 10px;
-  padding: 8px 10px;
-  border: 1px solid var(--line);
-  border-left: 2px solid var(--amber);
-  border-radius: 0 6px 6px 0;
-  background: rgba(214, 160, 74, 0.07);
+  padding: 9px 11px;
+  border: 1px solid rgba(214, 160, 74, 0.16);
+  border-left: 3px solid var(--amber);
+  border-radius: 0 8px 8px 0;
+  background: rgba(214, 160, 74, 0.08);
   font-size: 12px;
   line-height: 1.5;
   color: var(--muted);
@@ -2260,7 +2483,7 @@ button.node-play:hover { background: rgba(20, 16, 12, 0.92); }
 
 .qc-checks { list-style: none; margin: 12px 0 0; padding: 0; }
 
-.qc-check { display: flex; gap: 9px; padding: 7px 0; border-top: 1px solid var(--line); }
+.qc-check { display: flex; gap: 9px; padding: 8px 0; border-top: 1px solid rgba(228, 165, 85, 0.07); }
 .qc-check:first-child { border-top: none; }
 
 .qc-mark { font-size: 12px; line-height: 1.5; width: 12px; flex: none; }
@@ -2285,21 +2508,22 @@ button.node-play:hover { background: rgba(20, 16, 12, 0.92); }
   color: var(--red);
   border: 1px solid currentColor;
   border-radius: 999px;
-  padding: 0 5px;
+  padding: 1px 6px;
+  background: color-mix(in srgb, currentColor 12%, transparent);
 }
 
-.qc-score { margin-left: auto; font-family: var(--mono); font-size: 10px; color: var(--faint); }
+.qc-score { margin-left: auto; font-family: var(--mono); font-size: 10px; font-weight: 600; color: var(--muted); }
 
 .qc-bar {
-  height: 2px;
-  margin: 5px 0 5px;
-  border-radius: 2px;
-  background: var(--line);
+  height: 3px;
+  margin: 6px 0 5px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.06);
   overflow: hidden;
 }
-.qc-bar i { display: block; height: 100%; border-radius: 2px; }
-.qc-check.ok .qc-bar i { background: var(--green); }
-.qc-check.bad .qc-bar i { background: var(--red); }
+.qc-bar i { display: block; height: 100%; border-radius: 3px; transition: width 0.4s cubic-bezier(0.2, 0.8, 0.25, 1); }
+.qc-check.ok .qc-bar i { background: linear-gradient(90deg, color-mix(in srgb, var(--green) 55%, transparent), var(--green)); box-shadow: 0 0 8px rgba(134, 176, 107, 0.55); }
+.qc-check.bad .qc-bar i { background: linear-gradient(90deg, color-mix(in srgb, var(--red) 55%, transparent), var(--red)); box-shadow: 0 0 8px rgba(201, 112, 92, 0.55); }
 
 .qc-note { font-size: 12px; line-height: 1.5; color: var(--muted); }
 .qc-note.dim { color: var(--faint); font-style: italic; }
@@ -2311,8 +2535,9 @@ button.node-play:hover { background: rgba(20, 16, 12, 0.92); }
 .qc-strip img {
   width: 76px; height: 44px;
   object-fit: cover;
-  border-radius: 5px;
-  border: 1px solid var(--line);
+  border-radius: 7px;
+  border: 1px solid rgba(228, 165, 85, 0.16);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
   flex: none;
 }
 
@@ -2322,17 +2547,17 @@ button.node-play:hover { background: rgba(20, 16, 12, 0.92); }
   align-items: center;
   gap: 8px;
   padding: 4px 8px 4px 4px;
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  background: var(--surface-2);
+  border: 1px solid rgba(228, 165, 85, 0.12);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.025);
   color: var(--muted);
   font-family: inherit;
   font-size: 12px;
   cursor: pointer;
   text-align: left;
-  transition: border-color 0.15s ease, color 0.15s ease;
+  transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
 }
-.qc-ref:hover:not(:disabled) { border-color: var(--gold-dim); color: var(--cream); }
+.qc-ref:hover:not(:disabled) { border-color: rgba(228, 165, 85, 0.34); color: var(--cream); background: rgba(228, 165, 85, 0.06); }
 .qc-ref:disabled { cursor: default; opacity: 0.7; }
 .qc-ref img { width: 40px; height: 26px; object-fit: cover; border-radius: 4px; flex: none; }
 
@@ -2348,11 +2573,11 @@ button.node-play:hover { background: rgba(20, 16, 12, 0.92); }
    row so the director never defaults to paying for a re-render. */
 .qc-rec {
   margin-top: 13px;
-  padding: 11px 12px;
-  border: 1px solid var(--line);
-  border-left: 2px solid var(--gold);
-  border-radius: 0 7px 7px 0;
-  background: var(--gold-soft);
+  padding: 11px 13px;
+  border: 1px solid rgba(228, 165, 85, 0.14);
+  border-left: 3px solid var(--gold);
+  border-radius: 0 9px 9px 0;
+  background: rgba(228, 165, 85, 0.06);
 }
 .qc-rec.select, .qc-rec.accept { border-left-color: var(--green); background: rgba(134, 176, 107, 0.06); }
 .qc-rec.flag { border-left-color: var(--red); background: rgba(201, 112, 92, 0.07); }

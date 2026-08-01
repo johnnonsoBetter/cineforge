@@ -236,7 +236,8 @@ function meta(node) {
 export default function Inspector({ node, onClose, onRegenerate, busy,
                                     references, onSelectNode, onSelectEntity, onRename,
                                     onSelectVersion, sceneShots, onAcceptQC,
-                                    onReviewQC, entityNodes, onSetDialogue }) {
+                                    onReviewQC, entityNodes, onSetDialogue,
+                                    width = 382, collapsed = false, onResize, onToggleCollapse }) {
   const entityRefs = node?.data?.id ? (references?.[node.data.id] || []) : [];
 
   const asset = node?.asset;
@@ -283,20 +284,63 @@ export default function Inspector({ node, onClose, onRegenerate, busy,
   // selected that no longer exists.
   const active = tabs.some((t) => t.id === tab) ? tab : tabs[0]?.id;
 
+  // Drag the left edge to resize; App clamps and persists the width. Panel-wide user-select is
+  // suppressed for the drag so text doesn't get highlighted mid-pull.
+  const startResize = (e) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startW = width;
+    document.body.style.userSelect = 'none';
+    document.body.style.cursor = 'ew-resize';
+    const onMove = (ev) => onResize?.(startW + (startX - ev.clientX));
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+      document.body.style.userSelect = '';
+      document.body.style.cursor = '';
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  };
+
   if (!node) return null;
+
+  // Collapsed: a slim spine pinned to the edge — clears the canvas while keeping the selection
+  // one click away. Its width is driven by the --inspector-w var App sets.
+  if (collapsed) {
+    return (
+      <aside className={`inspector collapsed node-${node.kind}`}>
+        <button className="insp-reopen" onClick={onToggleCollapse} title="Expand inspector">
+          <span className="insp-chip insp-reopen-chip" aria-hidden="true" />
+          <span className="insp-reopen-label">{KIND_LABEL[node.kind] || node.kind}</span>
+          <span className="insp-reopen-arrow" aria-hidden="true">‹</span>
+        </button>
+      </aside>
+    );
+  }
 
   return (
     <aside className={`inspector node-${node.kind}`}>
+      <div className="insp-resize" onMouseDown={startResize} title="Drag to resize" />
       <div className="insp-head">
-        <div style={{ flex: 1 }}>
-          <span className="mono-label">{KIND_LABEL[node.kind] || node.kind}</span>
-          <h2>{node.title}</h2>
+        <div className="insp-eyebrow">
+          <span className="mono-label">Inspector</span>
+          <div className="insp-head-btns">
+            <button className="insp-close" onClick={onToggleCollapse} title="Collapse panel">⟩</button>
+            <button className="insp-close" onClick={onClose} title="Close">✕</button>
+          </div>
         </div>
-        <span className="node-status" style={{ color: statusColor(node.status), marginTop: 4 }}>
-          <span className="dot" style={{ background: statusColor(node.status) }} />
-          {STATUS_LABEL[node.status] || node.status}
-        </span>
-        <button className="insp-close" onClick={onClose} title="Close">✕</button>
+        <div className="insp-ident">
+          <span className="insp-chip" aria-hidden="true" />
+          <div className="insp-ident-text">
+            <h2>{node.title}</h2>
+            <span className="mono-label">{KIND_LABEL[node.kind] || node.kind}</span>
+          </div>
+          <span className="node-status" style={{ color: statusColor(node.status) }}>
+            <span className="dot" style={{ background: statusColor(node.status) }} />
+            {STATUS_LABEL[node.status] || node.status}
+          </span>
+        </div>
       </div>
 
       {url && (
@@ -322,7 +366,7 @@ export default function Inspector({ node, onClose, onRegenerate, busy,
               {/* The verdict now lives behind a tab, so carry its colour out to the tab —
                   a red dot here is the only cue a hidden gate is failing. */}
               {t.id === 'review' && node.qc && (
-                <span className="insp-tab-dot" style={{ background: verdictColor(node.qc.verdict) }} />
+                <span className="insp-tab-dot" style={{ background: verdictColor(node.qc.verdict), color: verdictColor(node.qc.verdict) }} />
               )}
               {t.label}
             </button>

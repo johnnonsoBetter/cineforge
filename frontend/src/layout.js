@@ -337,7 +337,7 @@ export function buildGraph(nodeList, { selectedId, impactIds, onAddShot, onAddKe
         id: `${pid}->${n.node_id}`,
         source: pid,
         target: n.node_id,
-        type: 'bezier',
+        type: 'smoothstep',
         className: [state, focusing ? (carries ? 'focus-impact' : 'focus-dim') : '']
           .filter(Boolean).join(' '),
         animated: n.status === 'running' || carries,

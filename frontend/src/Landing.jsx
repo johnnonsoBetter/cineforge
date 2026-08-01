@@ -70,7 +70,7 @@ export default function Landing({ session }) {
   }, []);
 
   return (
-    <div style={rootStyle}>
+    <div className="cf-landing" style={rootStyle}>
       {/* film grain overlay */}
       <div
         aria-hidden

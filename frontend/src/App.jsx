@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useNavigate, useMatch, useLocation } from 'react-router-dom';
 import {
-  ReactFlow, Background, MiniMap, useReactFlow, ReactFlowProvider,
+  ReactFlow, Background, MiniMap, Controls, useReactFlow, ReactFlowProvider,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 
@@ -36,6 +36,18 @@ function Studio({ session }) {
   const [nodes, setNodes] = useState([]);           // graph nodes from the backend
   const [messages, setMessages] = useState([mkMsg('director', "Give me one idea. I'll direct the whole film — story, cast, locations, keyframes, animated shots, final cut — and log every frame to Backblaze B2.")]);
   const [selectedId, setSelectedId] = useState(null);
+  // The inspector is user-resizable and collapsible so the canvas can reclaim the space.
+  // Width persists across sessions; collapse is a per-session view toggle.
+  const [inspectorWidth, setInspectorWidth] = useState(() => {
+    const saved = Number(localStorage.getItem('cf_insp_w'));
+    return saved >= 320 && saved <= 680 ? saved : 382;
+  });
+  const [inspectorCollapsed, setInspectorCollapsed] = useState(false);
+  const resizeInspector = useCallback((w) => {
+    const clamped = Math.max(320, Math.min(680, w));
+    setInspectorWidth(clamped);
+    localStorage.setItem('cf_insp_w', String(clamped));
+  }, []);
   const [busy, setBusy] = useState(false);
   const [built, setBuilt] = useState(false);
   const [toast, setToast] = useState(null);
@@ -808,7 +820,10 @@ function Studio({ session }) {
           />
         )}
 
-        <div className="stage">
+        <div
+          className="stage"
+          style={{ '--inspector-w': selectedNode ? `${inspectorCollapsed ? 46 : inspectorWidth}px` : '0px' }}
+        >
           {!hasGraph && <Hero onForge={forge} busy={busy} />}
 
           {/* Coming back to a film you already started: the empty state doubles as a library.
@@ -862,12 +877,15 @@ function Studio({ session }) {
             fitView
             fitViewOptions={{ padding: 0.2 }}
           >
-            <Background color="#3a3026" gap={26} size={1.4} />
+            <Background color="#40331f" gap={22} size={1.5} />
+            <Controls showInteractive={false} position="bottom-left" />
             {hasGraph && (
               <MiniMap
                 pannable zoomable
-                nodeColor={() => '#4a3f30'}
-                maskColor="rgba(20,17,13,0.6)"
+                nodeStrokeWidth={2}
+                nodeColor={() => '#e4a555'}
+                nodeStrokeColor={() => '#e4a555'}
+                maskColor="rgba(10,8,5,0.66)"
                 style={{ width: 168, height: 108 }}
               />
             )}
@@ -905,6 +923,10 @@ function Studio({ session }) {
               onAcceptQC={acceptQC}
               onReviewQC={reviewQC}
               onSetDialogue={setDialogue}
+              width={inspectorWidth}
+              collapsed={inspectorCollapsed}
+              onResize={resizeInspector}
+              onToggleCollapse={() => setInspectorCollapsed((c) => !c)}
             />
           )}
 
