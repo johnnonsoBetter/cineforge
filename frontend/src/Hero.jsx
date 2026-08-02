@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { SUGGESTIONS, SETTING_GROUPS, DEFAULT_SETTINGS, sceneCount, shotCount } from './ui.js';
+import Logo from './components/Logo.jsx';
 
 // The empty state: one idea in, a whole film out.
 export default function Hero({ onForge, busy }) {
@@ -20,7 +21,7 @@ export default function Hero({ onForge, busy }) {
   return (
     <div className="hero">
       <div className="hero-inner">
-        <div className="hero-mark">Cine<em>Forge</em></div>
+        <Logo variant="lockup" className="hero-logo" />
         <div className="hero-sub">
           One idea becomes a finished cinematic short — screenplay, cast, keyframes, animated shots, final cut.
         </div>

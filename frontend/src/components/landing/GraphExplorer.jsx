@@ -1,6 +1,7 @@
 import { useCallback, useState, useMemo } from 'react';
 import {
   ReactFlow,
+  ReactFlowProvider,
   Background,
   BackgroundVariant,
   Controls,
@@ -256,7 +257,11 @@ export default function GraphExplorer() {
       .filter(Boolean);
   }, [selected, edges]);
 
+  // Its own provider so this landing graph never shares a React Flow store with the studio
+  // canvas — two <ReactFlow>s under one provider collide on node types (the studio's cine /
+  // coverageGroup nodes fall back to the invisible "default" type and the canvas reads empty).
   return (
+    <ReactFlowProvider>
     <section className="relative px-6 py-28">
       <div className="mx-auto max-w-7xl">
         <div className="flex flex-col items-center text-center mb-14">
@@ -448,5 +453,6 @@ export default function GraphExplorer() {
         </div>
       </div>
     </section>
+    </ReactFlowProvider>
   );
 }

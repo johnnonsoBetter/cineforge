@@ -11,7 +11,7 @@ import {
 // The Creative Director conversation. Streams stage lines while the pipeline runs,
 // keeps the director/user turns, and hosts the conversational-edit composer.
 export default function Rail({ messages, canEdit, nodes, targetNode, onClearTarget, onFocusNode,
-                               onPropose, proposal, onApplyProposal, onDiscardProposal,
+                               onPropose, onClarifyPick, proposal, onApplyProposal, onDiscardProposal,
                                editHistory, onUndoEdit, busy,
                                impact, onRegenerate, onToggleLock }) {
   const [draft, setDraft] = useState('');
@@ -182,6 +182,17 @@ export default function Rail({ messages, canEdit, nodes, targetNode, onClearTarg
           <div key={m.id} className={`msg msg-${m.role}`}>
             {m.role === 'stage' && <span className="dot" style={{ background: 'var(--gold-dim)' }} />}
             {m.text}
+            {m.clarify && (
+              <div className="clarify-opts">
+                {m.clarify.options.map((o) => (
+                  <button key={o.node_id} className="clarify-chip" disabled={composerLocked}
+                          onClick={() => onClarifyPick(m.clarify.instruction, o.node_id)}
+                          title={`Aim the note at ${o.title}`}>
+                    {o.title}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         ))}
       </div>

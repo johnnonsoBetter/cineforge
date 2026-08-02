@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useNavigate, useMatch, useLocation } from 'react-router-dom';
+import { AnimatePresence, motion } from 'framer-motion';
 import {
   ReactFlow, Background, MiniMap, Controls, useReactFlow, ReactFlowProvider,
 } from '@xyflow/react';
@@ -10,7 +11,7 @@ import { buildGraph } from './layout.js';
 import { descendantsOf } from './graph.js';
 import { CineNode } from './CineNode.jsx';
 import { CoverageGroup } from './CoverageGroup.jsx';
-import Hero from './Hero.jsx';
+import CanvasBoot from './components/CanvasBoot.jsx';
 import Rail from './Rail.jsx';
 import Monitor from './Monitor.jsx';
 import Inspector from './Inspector.jsx';
@@ -22,6 +23,7 @@ import QCGate from './QCGate.jsx';
 import Login from './Login.jsx';
 import Landing from './Landing.jsx';
 import Showcase from './Showcase.jsx';
+import Logo from './components/Logo.jsx';
 import { authEnabled, getSession, onAuthChange, signOut } from './auth.js';
 import { headline as qcHeadline } from './qc.js';
 import { STAGE_KEYS, STAGE_LABEL, isOpenGate } from './stages.js';
@@ -30,7 +32,7 @@ const seedStages = () => STAGE_KEYS.map((key) => ({ key, status: 'pending', gate
 
 const nodeTypes = { cine: CineNode, coverageGroup: CoverageGroup };
 let MSG_SEQ = 0;
-const mkMsg = (role, text) => ({ id: `m${++MSG_SEQ}`, role, text });
+const mkMsg = (role, text, extra) => ({ id: `m${++MSG_SEQ}`, role, text, ...extra });
 
 function Studio({ session }) {
   const [projectId, setProjectId] = useState(null);
@@ -494,6 +496,13 @@ function Studio({ session }) {
         setProposal(p);
         return true;
       }
+      // The router couldn't place the note but offered the parts it might mean — surface
+      // them as choices, keeping the note so a pick can re-propose with a settled target.
+      if (p.clarify) {
+        setMessages((m) => [...m, mkMsg('director', p.clarify.question,
+          { clarify: { instruction, options: p.clarify.options } })]);
+        return true;
+      }
       pushMsg('error', p.reason || "I couldn't work out what that note meant.");
     } catch (e) {
       pushMsg('error', `I couldn't read that note: ${e.message}`);
@@ -502,6 +511,22 @@ function Studio({ session }) {
     }
     return false;
   }, [projectId, busy, proposal, selectedId, pushMsg]);
+
+  // Picking a clarify choice re-proposes the same note with the target now settled — no
+  // second user turn, since the note was already said and is captured in the choice card.
+  const resolveClarify = useCallback(async (instruction, nodeId) => {
+    if (!projectId || busy || proposal || proposalRequestRef.current) return;
+    proposalRequestRef.current = true;
+    try {
+      const p = await api.proposeEdit(projectId, instruction, nodeId);
+      if (p.ok) setProposal(p);
+      else pushMsg('error', p.reason || "I still couldn't place that note.");
+    } catch (e) {
+      pushMsg('error', `I couldn't read that note: ${e.message}`);
+    } finally {
+      proposalRequestRef.current = false;
+    }
+  }, [projectId, busy, proposal, pushMsg]);
 
   const applyProposal = useCallback(async (p) => {
     if (!projectId || busy) return;
@@ -601,7 +626,9 @@ function Studio({ session }) {
   }, [projectId, busy, pushMsg]);
 
   // "New" opens a fresh forge; the URL effect clears the canvas when the route leaves /p/:id.
-  const reset = useCallback(() => { navigate('/studio'); }, [navigate]);
+  // The idea input now lives on the landing composer, so "New" returns there to author the
+  // next film rather than dropping onto an empty studio floor.
+  const reset = useCallback(() => { navigate('/'); }, [navigate]);
 
   // ---- share: make the film public, then hand out its link ----
   // Public means two things at once — reachable by anyone at /share/:id, and listed in the
@@ -718,6 +745,7 @@ function Studio({ session }) {
     <div className={`app${hasGraph ? '' : ' empty'}`}>
       <header className="topbar">
         <div className="brand" onClick={() => navigate('/')} style={{ cursor: 'pointer' }} title="Home">
+          <Logo variant="icon" className="brand-logo" />
           <span className="brand-mark">CineForge</span>
           <span className="brand-sub">AI Film Studio</span>
         </div>
@@ -840,6 +868,7 @@ function Studio({ session }) {
             onClearTarget={() => setSelectedId(null)}
             onFocusNode={setSelectedId}
             onPropose={proposeEdit}
+            onClarifyPick={resolveClarify}
             proposal={proposal}
             editHistory={editHistory}
             onUndoEdit={undoEdit}
@@ -856,11 +885,15 @@ function Studio({ session }) {
           className="stage"
           style={{ '--inspector-w': selectedNode ? `${inspectorCollapsed ? 46 : inspectorWidth}px` : '0px' }}
         >
-          {!hasGraph && <Hero onForge={forge} busy={busy} />}
+          {/* No input on the studio floor anymore — a forge is authored on the landing
+              composer, so arriving here either means the canvas is spinning up or it's idle. */}
+          {!hasGraph && (
+            <CanvasBoot booting={busy || !!location.state?.forge} onNew={() => navigate('/')} />
+          )}
 
           {/* Coming back to a film you already started: the empty state doubles as a library.
-              Only rendered when there's something to reopen, so a first-time canvas stays clean. */}
-          {!hasGraph && library.length > 0 && (
+              Only rendered when idle (not mid-forge) and there's something to reopen. */}
+          {!hasGraph && !busy && !location.state?.forge && library.length > 0 && (
             <div className="library">
               <div className="library-head">Your films</div>
               <div className="library-grid">
@@ -1026,7 +1059,14 @@ function Studio({ session }) {
 // wrapping the whole app.
 function StudioGate({ session }) {
   if (authEnabled && !session) return <Navigate to="/login" replace />;
-  return <Studio session={session} />;
+  // The studio owns its own React Flow store. Scoping the provider to this surface (rather
+  // than the whole app) keeps the canvas fully isolated from the landing's graph explorer —
+  // two flows under one provider share a store and their node types collide.
+  return (
+    <ReactFlowProvider>
+      <Studio session={session} />
+    </ReactFlowProvider>
+  );
 }
 
 // The login page has no reason to show once you're in — bounce straight to the studio. With
@@ -1044,7 +1084,7 @@ function MobileGate() {
   return (
     <div className="mobile-gate">
       <div className="mobile-gate-inner">
-        <div className="hero-mark">Cine<em>Forge</em></div>
+        <Logo variant="lockup" className="hero-logo" />
         <div className="mg-badge">Desktop experience</div>
         <h1>Best seen on the big screen</h1>
         <p>
@@ -1055,6 +1095,93 @@ function MobileGate() {
         <p className="mg-hint">Open CineForge on a laptop or desktop — a window at least 900px wide — to start forging.</p>
       </div>
     </div>
+  );
+}
+
+// ── Cinematic route reveal ──────────────────────────────────────────────────
+// Prompting from the landing shouldn't feel like a page load. We keep the landing
+// mounted while the studio canvas emerges over it: the two routes overlay as fixed
+// surfaces, the landing recedes (shrink + blur + fade) and the studio comes forth
+// (rises from a hair under scale + fades in) in one continuous beat. The URL still
+// changes underneath, so refresh/share/back all keep working.
+
+const REVEAL_IN = { duration: 0.62, ease: [0.16, 1, 0.3, 1] };
+const REVEAL_OUT = { duration: 0.44, ease: [0.4, 0, 0.2, 1] };
+
+const surfaceVariants = {
+  // The marketing landing. Blur is cheap here (static content), so it carries the
+  // "receding into the dark" read while the studio takes over.
+  landing: {
+    initial: { opacity: 0, scale: 1.01, filter: 'blur(0px)' },
+    animate: { opacity: 1, scale: 1, filter: 'blur(0px)', transition: REVEAL_IN },
+    exit: { opacity: 0, scale: 0.94, filter: 'blur(8px)', transition: REVEAL_OUT },
+  },
+  // The canvas. Opacity only — no scale and no blur on the live ReactFlow tree. A CSS
+  // transform on a React Flow ancestor while it initialises corrupts its pane measurement:
+  // forging from the landing mounts React Flow mid-reveal, and under an animating `scale()`
+  // it comes up with an empty internal node store (the graph renders 0 nodes until a refresh
+  // remounts it in a settled, untransformed container). A plain opacity fade keeps the reveal
+  // while leaving the canvas transform-free as the first nodes stream in.
+  studio: {
+    initial: { opacity: 0 },
+    animate: { opacity: 1, transition: REVEAL_IN },
+    exit: { opacity: 0, transition: REVEAL_OUT },
+  },
+  // Login / share — no need for the cinematic dolly, just a clean crossfade.
+  plain: {
+    initial: { opacity: 0 },
+    animate: { opacity: 1, transition: { duration: 0.3 } },
+    exit: { opacity: 0, transition: { duration: 0.2 } },
+  },
+};
+
+function Surface({ variant = 'plain', children }) {
+  return (
+    <motion.div
+      className={`route-surface route-surface--${variant}`}
+      variants={surfaceVariants[variant] || surfaceVariants.plain}
+      initial="initial"
+      animate="animate"
+      exit="exit"
+      style={{
+        position: 'fixed',
+        inset: 0,
+        transformOrigin: 'center center',
+        // The landing is a long scrolling page; the studio owns the whole viewport.
+        overflowY: variant === 'landing' ? 'auto' : 'hidden',
+        // Opaque so the emerging studio cleanly covers the receding landing.
+        backgroundColor: '#0a0805',
+      }}
+    >
+      {children}
+    </motion.div>
+  );
+}
+
+// `/studio` and `/p/:id` are the *same* surface — a forge navigates between them
+// mid-stream, and we must not remount the streaming Studio. Keying AnimatePresence by
+// this collapsed surface (not the raw pathname) keeps Studio alive across that hop while
+// still animating the landing→studio and studio→landing crossings.
+function surfaceKey(pathname) {
+  if (pathname === '/') return 'landing';
+  if (pathname === '/login') return 'login';
+  if (pathname.startsWith('/share')) return 'share';
+  return 'studio'; // /studio and /p/:projectId
+}
+
+function AnimatedRoutes({ session }) {
+  const location = useLocation();
+  return (
+    <AnimatePresence initial={false}>
+      <Routes location={location} key={surfaceKey(location.pathname)}>
+        <Route path="/" element={<Surface variant="landing"><Landing session={session} /></Surface>} />
+        <Route path="/login" element={<Surface variant="plain"><LoginRoute session={session} /></Surface>} />
+        <Route path="/studio" element={<Surface variant="studio"><StudioGate session={session} /></Surface>} />
+        <Route path="/p/:projectId" element={<Surface variant="studio"><StudioGate session={session} /></Surface>} />
+        <Route path="/share/:projectId" element={<Surface variant="plain"><Showcase session={session} /></Surface>} />
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    </AnimatePresence>
   );
 }
 
@@ -1084,16 +1211,7 @@ export default function App() {
     <>
       <MobileGate />
       <BrowserRouter>
-        <ReactFlowProvider>
-          <Routes>
-            <Route path="/" element={<Landing session={session} />} />
-            <Route path="/login" element={<LoginRoute session={session} />} />
-            <Route path="/studio" element={<StudioGate session={session} />} />
-            <Route path="/p/:projectId" element={<StudioGate session={session} />} />
-            <Route path="/share/:projectId" element={<Showcase session={session} />} />
-            <Route path="*" element={<Navigate to="/" replace />} />
-          </Routes>
-        </ReactFlowProvider>
+        <AnimatedRoutes session={session} />
       </BrowserRouter>
     </>
   );

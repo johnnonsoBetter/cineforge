@@ -12,18 +12,17 @@ primary_region = "iad"
 [build]
 
 [env]
-  # Mock mode: no keys, no cost. Flip to real generation with:
-  #   fly secrets set MOCK_MODE=false GMI_API_KEY=... B2_KEY_ID=... B2_APP_KEY=... B2_BUCKET=... B2_REGION=... OPENAI_API_KEY=...
-  # (secrets override these env defaults; no redeploy of the image needed).
+  # Mock mode: no keys, no cost.
   MOCK_MODE = "true"
   DATA_DIR = "/data"
+
+  # Frontend (Vite)
+  VITE_SUPABASE_URL = "https://nrqyepfocwgbhxruwmkw.supabase.co"
+  VITE_SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5ycXllcGZvY3dnYmh4cnV3bWt3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODUyNDE1ODAsImV4cCI6MjEwMDgxNzU4MH0.twySg23MXIN5IEwmboyGW0Ygiyl58A-f0fhb0vpDrrE"
 
 [http_service]
   internal_port = 8080
   force_https = true
-  # Keep the one machine running: SSE streams are long-lived and the in-memory project cache
-  # should stay warm. With the volume it also reloads state from disk on restart, so you can
-  # switch this to "stop" later to save money — cold starts just re-read /data.
   auto_stop_machines = "off"
   auto_start_machines = true
   min_machines_running = 1
@@ -33,7 +32,6 @@ primary_region = "iad"
     hard_limit = 250
     soft_limit = 200
 
-# Persistent state. The volume must live in the same region as the machine (primary_region).
 [[mounts]]
   source = "cineforge_data"
   destination = "/data"

@@ -5,6 +5,11 @@ from pydantic import ValidationError
 from backend import models
 from backend.ai import director
 from backend.ai import entities
+from backend.ai import route
+
+
+def _scene(node_id: str, n: int, title: str) -> "models.Node":
+    return models.Node(node_id=node_id, kind=models.NodeKind.SCENE, title=title, data={"n": n})
 
 
 class ConversationalEditTests(TestCase):
@@ -52,6 +57,35 @@ class ConversationalEditTests(TestCase):
 
         self.assertEqual(events[0].type, "error")
         self.assertIn("empty", events[0].label)
+
+    def test_unplaceable_note_offers_clarify_anchors(self) -> None:
+        # The screenshot case: a note with no signal ("movie") should stop dead-ending and
+        # instead ask, offering the opening and the ending as tappable choices.
+        project = models.Project(project_id="p1", nodes=[
+            _scene("sc_1", 1, "Scene 1: Arrival"),
+            _scene("sc_2", 2, "Scene 2: The reckoning"),
+            _scene("sc_3", 3, "Scene 3: Departure"),
+        ])
+
+        proposal = director.propose_edit(project, "movie", None)
+
+        self.assertFalse(proposal["ok"])
+        self.assertNotIn("reason", proposal)
+        ids = [o["node_id"] for o in proposal["clarify"]["options"]]
+        self.assertEqual(ids, ["sc_1", "sc_3"])
+
+    def test_candidates_surface_a_substring_name_route_misses(self) -> None:
+        # route() only matches a name on a word boundary; candidates() is looser, so a note
+        # that mentions the character mid-word still gets them offered as a choice.
+        character = models.Node(
+            node_id="char_1", kind=models.NodeKind.CHARACTER, title="Ada",
+            data={"id": "ADA", "dna": "A guarded detective."})
+        project = models.Project(project_id="p1", nodes=[
+            character, _scene("sc_1", 1, "Scene 1: Arrival")])
+
+        self.assertIsNone(route.route(project, "make it adamantly darker")[0])
+        picked = route.candidates(project, "make it adamantly darker")
+        self.assertEqual(picked[0].node_id, "char_1")
 
     def test_follow_up_inherits_last_applied_target(self) -> None:
         shot = models.Node(node_id="shot_1", kind=models.NodeKind.SHOT, title="Close-up")

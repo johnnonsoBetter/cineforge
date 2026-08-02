@@ -1627,9 +1627,18 @@ def propose_edit(project: Project, instruction: str, target_node_id: str | None)
         target = project.get(node_id) if node_id else None
 
     if not target or target.kind in (NodeKind.STORY, NodeKind.TIMELINE):
+        # Rather than dead-end a note the router couldn't place, offer the parts it might
+        # have meant as tappable choices — picking one re-proposes with that target settled.
+        opts = route.candidates(project, instruction)
+        if opts:
+            return {"ok": False, "note": instruction, "clarify": {
+                "question": "Which part did you mean?",
+                "options": [{"node_id": n.node_id,
+                             "title": entities.resolve(n.title, names),
+                             "kind": n.kind.value} for n in opts]}}
         return {"ok": False,
-                "reason": "I couldn't tell which part of the film you meant — name a "
-                          "character, a place, a scene or a shot, or @-reference one."}
+                "reason": "I couldn't tell which part of the film you meant — try naming a "
+                          "character, a place or a scene."}
 
     title = entities.resolve(target.title, names)
     tgt = {"node_id": target.node_id, "title": title, "kind": target.kind.value}

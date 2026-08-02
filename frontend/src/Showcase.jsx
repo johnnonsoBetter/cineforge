@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import * as api from './api.js';
 import { authEnabled } from './auth.js';
 import TvPlayer from './components/TvPlayer.jsx';
+import Logo from './components/Logo.jsx';
 
 // The public face of one film — reached by a share link and from the template gallery.
 //
@@ -116,6 +117,7 @@ function ShowNav({ onHome, action }) {
   return (
     <header className="lnav">
       <div className="lnav-brand" onClick={onHome} style={{ cursor: 'pointer' }} title="Home">
+        <Logo variant="icon" className="lnav-logo" />
         <span className="brand-mark">CineForge</span>
         <span className="brand-sub">AI Film Studio</span>
       </div>

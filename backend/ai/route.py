@@ -107,6 +107,59 @@ def _heuristic(project: Project, instruction: str) -> tuple[str | None, str, str
     return None, "semantic", None
 
 
+def candidates(project: Project, instruction: str, limit: int = 3) -> list:
+    """The shortlist a note *might* mean, best first — offered when `route` can't commit.
+
+    Deliberately looser than the router: a bare substring name match counts, word overlap
+    reaches into a scene's action, and a note with no signal at all still gets the two
+    anchors a vibe note nearly always means (the opening and the ending). The point is to
+    turn "I couldn't tell" into a question with tappable answers instead of a dead end.
+    """
+    text = instruction.lower()
+    names = project.entity_names()
+    words = {w for w in re.findall(r"[a-z]{3,}", text)}
+    scored: dict[str, tuple[int, object]] = {}
+
+    def bump(node, s: int) -> None:
+        if not node or node.kind in (NodeKind.STORY, NodeKind.TIMELINE):
+            return
+        cur = scored.get(node.node_id)
+        if not cur or s > cur[0]:
+            scored[node.node_id] = (s, node)
+
+    # Named cast/places: a full-word match is the strongest signal, a bare substring counts.
+    for eid, name in names.items():
+        nm = (name or "").lower()
+        if not nm:
+            continue
+        if re.search(rf"\b{re.escape(nm)}\b", text):
+            bump(project.entity_node(eid), 6)
+        elif nm in text:
+            bump(project.entity_node(eid), 3)
+
+    scenes = sorted(project.by_kind(NodeKind.SCENE), key=lambda n: n.data.get("n", 0))
+    if scenes:
+        if re.search(r"\b(ending|end|final|last|closing|finale)\b", text):
+            bump(scenes[-1], 5)
+        if re.search(r"\b(opening|open|beginning|start|first|intro)\b", text):
+            bump(scenes[0], 5)
+        sm = re.search(r"\bscene\s*(\d+)\b", text)
+        if sm:
+            bump(next((s for s in scenes if s.data.get("n") == int(sm.group(1))), None), 5)
+        for s in scenes:
+            hay = entities.resolve(f"{s.title} {s.data.get('action', '')}", names).lower()
+            hits = len(words & set(re.findall(r"[a-z]{3,}", hay)))
+            if hits:
+                bump(s, hits)
+
+    ranked = [n for _, n in sorted(scored.values(), key=lambda sv: -sv[0])][:limit]
+
+    # No signal whatsoever (a note like "movie"): fall back to the two most-edited anchors.
+    if not ranked and scenes:
+        ranked = [scenes[0]] if len(scenes) == 1 else [scenes[0], scenes[-1]]
+    return ranked
+
+
 def route(project: Project, instruction: str) -> tuple[str | None, str, str | None]:
     """(node_id, change_kind, new_name). node_id is None when nothing matched."""
     # A clearly-phrased rename is unambiguous and free — don't spend a model call on it,

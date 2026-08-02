@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { signInWithEmail } from './auth.js';
+import Logo from './components/Logo.jsx';
 
 // The sign-in page (route: /login) — shown only when auth is enabled and no one is signed
 // in. Reuses the hero's look so it reads as the same product, not a bolted-on login page.
@@ -27,6 +28,7 @@ export default function Login() {
     <div className="landing authpage">
       <header className="lnav">
         <div className="lnav-brand" onClick={() => navigate('/')} style={{ cursor: 'pointer' }} title="Home">
+          <Logo variant="icon" className="lnav-logo" />
           <span className="brand-mark">CineForge</span>
           <span className="brand-sub">AI Film Studio</span>
         </div>
@@ -36,7 +38,7 @@ export default function Login() {
       </header>
       <div className="authbox">
         <div className="hero-inner">
-          <div className="hero-mark">Cine<em>Forge</em></div>
+          <Logo variant="lockup" className="hero-logo" />
           <div className="hero-sub">Sign in to open your films and pick up where you left off.</div>
 
           <div className="hero-card login-card">

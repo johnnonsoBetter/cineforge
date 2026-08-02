@@ -1,6 +1,7 @@
 import { motion } from 'framer-motion';
 import { useState, useEffect } from 'react';
-import { Clapperboard, Menu, X } from 'lucide-react';
+import { Menu, X } from 'lucide-react';
+import Logo from '../Logo.jsx';
 
 const links = [
   { label: 'Pipeline', href: '#pipeline' },
@@ -36,10 +37,8 @@ export default function Navbar({ authEnabled, session, onSignIn, onSignOut, onSt
         >
           <a href="#" className="flex items-center gap-2.5 group">
             <div className="relative">
-              <div className="absolute inset-0 bg-accent-500/40 blur-lg group-hover:bg-accent-500/60 transition-colors" />
-              <div className="relative grid h-9 w-9 place-items-center rounded-xl bg-gradient-to-br from-accent-400 to-accent-600 text-ink-950">
-                <Clapperboard className="h-5 w-5" strokeWidth={2.5} />
-              </div>
+              <div className="absolute inset-0 bg-accent-500/30 blur-lg group-hover:bg-accent-500/50 transition-colors" />
+              <Logo variant="icon" className="relative h-9 w-9" />
             </div>
             <span className="font-display text-lg font-semibold tracking-tight text-white">
               CineForge
