@@ -44,6 +44,8 @@ _SYSTEM = """You are a film creative director. Given a one-line idea, return STR
                                     high angle|dutch angle", "move": "how the camera moves",
                            "action": "what happens on screen in this shot",
                            "intent": "why this angle earns its place",
+                           "character_ids": ["ONLY the characters actually visible in THIS "
+                                             "setup", "[] for a detail insert of an object"],
                            "keyframe_prompt": "prompt for this unit's still",
                            "video_prompt": "prompt animating that still"}]}]
 }
@@ -55,6 +57,10 @@ is a new scene, not a new shot.
 Give each scene ONLY the coverage it earns: 1 for a simple beat, 2-3 when a scene turns on
 a reaction or a reveal, 4 at the very most. Vary it — a film where every scene is covered
 identically is a film nobody shot.
+For each setup, character_ids names ONLY the cast actually in that frame: a close-up of one
+person names that one, a two-shot names both, a detail insert of a prop or a list names
+nobody ([]). Every id must be one of the scene's character_ids. This is what keeps a solo
+close-up from being built against the whole scene's faces.
 
 EACH COVERAGE ENTRY IS ONE GENERATION UNIT: one still, then one 8-second clip animated from
 that exact still. So write both of its prompts, and write them as a pair — the video prompt
@@ -160,7 +166,7 @@ def _mock(idea: str, target: int = 4) -> dict:
              "coverage": [
                  {"shot": "wide shot", "angle": "low angle", "move": "slow push-in",
                   "action": "Simeon steps through the arch, arms spread, chin high, waiting for a reaction that never comes",
-                  "intent": "let the empty carpet do the work"}]},
+                  "intent": "let the empty carpet do the work", "character_ids": ["SIMEON"]}]},
             {"n": 2, "title": "The Checkpoint", "action": "The usher blocks him, scanning her clipboard, unimpressed",
              "environment_id": "GATE", "character_ids": ["SIMEON", "USHER"], "shot": "medium two-shot", "angle": "eye level",
              "move": "locked camera", "time": "evening", "atmosphere": "tense, comic",
@@ -169,13 +175,13 @@ def _mock(idea: str, target: int = 4) -> dict:
              "coverage": [
                  {"shot": "medium two-shot", "angle": "eye level", "move": "locked camera",
                   "action": "The Usher raises a flat hand, clipboard up; Simeon is still smiling",
-                  "intent": "hold both of them in one frame"},
+                  "intent": "hold both of them in one frame", "character_ids": ["SIMEON", "USHER"]},
                  {"shot": "insert", "angle": "high angle", "move": "slow tilt down",
                   "action": "her finger stops halfway down a list his name is not on",
-                  "intent": "show the verdict, not the reaction"},
+                  "intent": "show the verdict, not the reaction", "character_ids": []},
                  {"shot": "close-up", "angle": "eye level", "move": "locked camera",
                   "action": "Simeon's smile stays exactly where it was, and stops meaning anything",
-                  "intent": "the punchline is on his face"}]},
+                  "intent": "the punchline is on his face", "character_ids": ["SIMEON"]}]},
             {"n": 3, "title": "Negotiation", "action": "Simeon bargains, name-drops, sweats; the usher does not blink",
              "environment_id": "HALL", "character_ids": ["SIMEON", "USHER"], "shot": "close-up", "angle": "slight high angle",
              "move": "handheld drift", "time": "evening", "atmosphere": "desperate, funny",
@@ -184,10 +190,10 @@ def _mock(idea: str, target: int = 4) -> dict:
              "coverage": [
                  {"shot": "over-the-shoulder", "angle": "slight high angle", "move": "handheld drift in",
                   "action": "past the usher's shoulder, Simeon leans in, palms pressed together, whispering a name",
-                  "intent": "put us behind the person he has to convince"},
+                  "intent": "put us behind the person he has to convince", "character_ids": ["SIMEON", "USHER"]},
                  {"shot": "close-up", "angle": "eye level", "move": "locked camera",
                   "action": "the usher's expression does not move at all",
-                  "intent": "the wall, in one frame"}]},
+                  "intent": "the wall, in one frame", "character_ids": ["USHER"]}]},
             {"n": 4, "title": "The Button", "action": "He is seated at the very back by the speakers, defeated but nodding to the beat",
              "environment_id": "HALL", "character_ids": ["SIMEON"], "shot": "wide shot", "angle": "high angle",
              "move": "slow pull-back", "time": "night", "atmosphere": "bittersweet, warm",
@@ -196,10 +202,10 @@ def _mock(idea: str, target: int = 4) -> dict:
              "coverage": [
                  {"shot": "medium shot", "angle": "eye level", "move": "locked camera",
                   "action": "Simeon lowers himself into the last chair, right beside a speaker stack",
-                  "intent": "stay with him while he decides how to take it"},
+                  "intent": "stay with him while he decides how to take it", "character_ids": ["SIMEON"]},
                  {"shot": "wide shot", "angle": "high angle", "move": "slow pull-back",
                   "action": "he is settled, nodding to the beat, small in a wide warm room",
-                  "intent": "end on the scale of the room"}]},
+                  "intent": "end on the scale of the room", "character_ids": ["SIMEON"]}]},
         ],
     }
 
@@ -271,8 +277,30 @@ def _normalize_coverage(raw, scene: dict) -> list[dict]:
     Anything the model left blank falls back to the scene's own master framing, so a sparse
     entry still describes a shootable setup.
     """
+    scene_cast = scene.get("character_ids") or []
+
+    def unit_cast(raw_ids):
+        """A unit's in-frame cast, resolved against the scene's cast. None (the key is absent)
+        means 'inherit the whole scene' — the safe default, and what every pre-existing plan
+        gets. An explicit list, even an empty one, is honoured: [] is a frame with nobody in
+        it, so a detail insert can say so and not be built against the scene's faces."""
+        if not isinstance(raw_ids, list):
+            return None
+        out_ids: list[str] = []
+        for ref in raw_ids:
+            s = _slug(ref, "")
+            if not s:
+                continue
+            if s in scene_cast:
+                out_ids.append(s)
+            else:  # loose ref, same containment fallback resolve_char uses for the scene cast
+                hit = next((c for c in scene_cast if s in c or c in s), None)
+                if hit:
+                    out_ids.append(hit)
+        return list(dict.fromkeys(out_ids))
+
     blank = {"shot": "", "angle": "", "move": "", "action": "", "intent": "",
-             "keyframe_prompt": "", "video_prompt": ""}
+             "character_ids": None, "keyframe_prompt": "", "video_prompt": ""}
     out: list[dict] = []
     for c in raw or []:
         if isinstance(c, dict):
@@ -284,6 +312,7 @@ def _normalize_coverage(raw, scene: dict) -> list[dict]:
                         "move": str(c.get("move") or "").strip(),
                         "action": str(c.get("action") or c.get("text") or "").strip(),
                         "intent": str(c.get("intent") or "").strip(),
+                        "character_ids": unit_cast(c.get("character_ids")),
                         "keyframe_prompt": str(c.get("keyframe_prompt") or "").strip(),
                         "video_prompt": str(c.get("video_prompt") or "").strip()})
         elif isinstance(c, str) and c.strip():

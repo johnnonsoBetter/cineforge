@@ -92,6 +92,13 @@ class Config:
     QC_MAX_VIDEO_REGENS = int(os.getenv("QC_MAX_VIDEO_REGENS", "1"))
     QC_FRAME_SAMPLES = int(os.getenv("QC_FRAME_SAMPLES", "3"))  # frames sampled per clip
 
+    # How many reference images a single keyframe render may condition on. A frame is built
+    # from the sheets of the characters actually in it plus the scene's location plate, and
+    # image models commonly honour only the first few reference inputs — so this bounds the
+    # set, faces first and the plate reserved, rather than letting a crowd scene overflow it
+    # and drop identities at the provider's discretion. See director._unit_refs.
+    MAX_REF_IMAGES = int(os.getenv("MAX_REF_IMAGES", "4"))
+
     # How many independent renders a generation pass runs at once. The sheets and keyframe
     # passes fan their units out across a small thread pool — each unit is a blocking provider
     # call that spends most of its time waiting on the network, so a handful in flight cuts a

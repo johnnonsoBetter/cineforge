@@ -147,19 +147,27 @@ def _target_for(project: Project, node: Node, note: str | None = None) -> "qc_ag
         if not scene_node:
             return qc_agent.Target(intent=f"{node.title}. Film style: {style}")
         scene, _dna, env = _scene_context(project, scene_node)
-        refs, cast = _scene_review_context(project, scene_node)
         unit = node.data.get("coverage") or {}
+        unit_cast = unit.get("character_ids")
+        # Judged against exactly the sheets it was built from (see `_unit_refs`) — the
+        # characters in this frame, not the whole scene — so the gate holds each unit to the
+        # same locked set it was conditioned on, never to a sibling frame.
+        refs, cast = _unit_refs(project, scene_node, unit_cast)
+        insert = unit_cast == []  # an explicit empty cast: a detail insert with nobody in frame
+        subject = cast or ("a detail insert, nobody in frame" if insert else "the cast")
+        holds = ("the detail is legible and the location and lighting match the plate" if insert
+                 else "faces, wardrobe and lighting must be legible and must match the "
+                      "reference sheets")
         return qc_agent.Target(
-            # Judged against the sheets, not against a sibling frame: the sheets are the
-            # only thing every unit of the scene has in common, so they are the only fair
-            # thing to hold each one to.
             intent=(f"The still for one shot of scene {scene.get('n', '')}. "
-                    f"{cast or 'the cast'} in {env}: "
+                    f"{subject} in {env}: "
                     f"{unit.get('action') or scene.get('action', '')}. "
                     f"Framing: {node.data.get('setup') or 'as staged'}. This is the first "
-                    f"frame of a clip, so faces, wardrobe and lighting must be legible and "
-                    f"must match the reference sheets. Film style: {style}"),
-            references=refs)
+                    f"frame of a clip, so {holds}. Film style: {style}"),
+            references=refs,
+            # No face in frame → no identity to judge. Dropping the CRITICAL identity check
+            # stops an insert from failing the gate for not matching a sheet it never had.
+            skip_criteria=("identity",) if insert else ())
 
     if node.kind == NodeKind.SHOT:
         master = _master_of(project, node)
@@ -174,7 +182,10 @@ def _target_for(project: Project, node: Node, note: str | None = None) -> "qc_ag
                     f"{cov.get('action', '')} "
                     f"The source image is the first frame: same location, cast, wardrobe and "
                     f"lighting throughout, at natural real-time pace. Film style: {style}"),
-            references=refs)
+            references=refs,
+            # A clip animating an insert with nobody in frame has no identity to hold across
+            # its frames — judge continuity and motion, not a face that was never there.
+            skip_criteria=("identity",) if cov.get("character_ids") == [] else ())
 
     return qc_agent.Target(intent=f"{node.title}. Film style: {style}")
 
@@ -1059,19 +1070,54 @@ def _scene_review_context(project: Project, scene_node: Node) -> tuple[list[QCRe
     return refs, ", ".join(names)
 
 
+def _unit_refs(project: Project, scene_node: Node,
+               unit_cast: list[str] | None) -> tuple[list[QCReference], str]:
+    """The founding references for one coverage unit: the sheets of the characters actually
+    in THIS frame, then the scene's location plate — capped, faces first.
+
+    Filtering by the unit's cast is the other half of the identity lock. Conditioning a solo
+    close-up on the whole scene's sheets is how a second person's face bleeds into a frame
+    meant for one; a frame is built from exactly the identities it contains. The plate trails
+    the faces and the total is bounded (MAX_REF_IMAGES): a provider that honours only its
+    first few reference inputs then keeps the identities — the thing that drifts — and drops
+    the empty room, never the reverse. Returns the references and the cast names for the brief.
+    """
+    faces: list[QCReference] = []
+    names: list[str] = []
+    plate: QCReference | None = None
+    for pid in scene_node.parent_ids:
+        p = project.get(pid)
+        if not p:
+            continue
+        if p.kind == NodeKind.CHARACTER and (unit_cast is None or p.data.get("id") in unit_cast):
+            r = _reference(p)
+            if r:
+                faces.append(r)
+                names.append(p.title)
+        elif p.kind == NodeKind.ENVIRONMENT:
+            plate = _reference(p)
+    keep = max(1, cfg.MAX_REF_IMAGES - (1 if plate else 0))  # reserve a slot for the plate
+    faces, names = faces[:keep], names[:keep]
+    refs = faces + ([plate] if plate else [])
+    return refs, ", ".join(names)
+
+
 def _sheet_refs(project: Project, keyframe: Node) -> list[str]:
-    """The locked founding references a keyframe is generated *from* — its scene's approved
-    character sheets and environment plate, as image URLs.
+    """The locked founding references a keyframe is generated *from* — the approved sheets of
+    the characters in its own frame and the scene's environment plate, as image URLs.
 
     This is the pixel-level identity lock. The prompt asks the model to match the sheets; these
     hand it the actual sheets to condition on, so a face is carried across rather than merely
-    re-described. They are exactly the references the frame is later judged against, so what a
-    keyframe is built from and what it is graded on are the same locked set.
+    re-described. They are exactly the references the frame is later judged against (see
+    `_target_for`), so what a keyframe is built from and what it is graded on are the same
+    locked set.
     """
     scene_node = _scene_of(project, keyframe)
     if not scene_node:
         return []
-    refs, _cast = _scene_review_context(project, scene_node)
+    # The unit's own cast (None => the whole scene; [] => a detail insert with nobody in it).
+    unit_cast = (keyframe.data.get("coverage") or {}).get("character_ids")
+    refs, _cast = _unit_refs(project, scene_node, unit_cast)
     return [r.url for r in refs]
 
 

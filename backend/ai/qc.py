@@ -112,6 +112,11 @@ class Target:
     """
     intent: str
     references: list[QCReference] = field(default_factory=list)
+    # Criteria to drop for this one asset even though its kind normally carries them. A detail
+    # insert with nobody in frame has no identity to judge, so the CRITICAL identity check
+    # would otherwise fail every such frame and burn the regen budget on it. The caller, which
+    # knows the unit's in-frame cast, is the only place that can tell.
+    skip_criteria: tuple[str, ...] = ()
 
 
 # ---------------------------------------------------------------------------
@@ -345,7 +350,8 @@ def _mock(kind: NodeKind, criteria: list[str], frames: list[str], target: Target
 
 def review(kind: NodeKind, asset: Asset, target: Target, *, attempt: int = 0) -> QCReport:
     """Look at an asset and file a report. The one entry point to the gate."""
-    criteria = CRITERIA.get(kind, ["style", "integrity"])
+    criteria = [c for c in CRITERIA.get(kind, ["style", "integrity"])
+                if c not in target.skip_criteria]
     frames = sample_frames(asset)
 
     if not frames:

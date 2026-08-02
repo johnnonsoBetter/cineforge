@@ -194,9 +194,17 @@ def ensure_prompts(plan: dict, style: str) -> dict:
                              or plate_prompt(style, e.get("desc", "")))
 
     for s in plan.get("scenes", []):
-        blocks = [dna[cid] for cid in s.get("character_ids", []) if cid in dna]
+        scene_cast = s.get("character_ids", [])
         env = envs.get(s.get("environment_id"), "")
         for u in s.get("coverage", []):
+            # Each unit is composed against only the characters actually in THAT frame. A solo
+            # close-up must not carry the rest of the scene's cast into its prompt — that is the
+            # same drift the reference sheets exist to stop, reintroduced one layer up. A unit
+            # with no cast list (character_ids is None) inherits the whole scene; an explicit
+            # empty list is a frame with nobody in it, e.g. a detail insert.
+            unit_cast = u.get("character_ids")
+            cast = scene_cast if unit_cast is None else unit_cast
+            blocks = [dna[cid] for cid in cast if cid in dna]
             u["keyframe_prompt"] = (_lead(style, u.get("keyframe_prompt"))
                                     or keyframe_prompt(style, s, blocks, env, u))
             u["video_prompt"] = (_lead(style, u.get("video_prompt"))
