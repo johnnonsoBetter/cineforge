@@ -122,6 +122,14 @@ class UnitPromptScopeTest(unittest.TestCase):
         self.assertNotIn("agbada", insert)
         self.assertNotIn("gele", insert)
 
+    def test_prompt_locks_permanent_identity_first(self):
+        # Wardrobe is named after identity, not lumped with it, so the model spends its
+        # fidelity on the face — the layer that must never drift — before the costume.
+        plan = camera.ensure_prompts(self._plan(), "cinematic")
+        kf = plan["scenes"][0]["coverage"][0]["keyframe_prompt"]
+        # In the closing match instruction, identity is named before wardrobe.
+        self.assertIn("same face, build, hair and skin above all, then the same wardrobe", kf)
+
 
 class NormalizeUnitCastTest(unittest.TestCase):
     """The normalizer resolves a unit's cast against the scene and preserves None vs []."""

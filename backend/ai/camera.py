@@ -40,11 +40,12 @@ def _who(dna_blocks: list[str]) -> str:
 
 # ---- the identity layer ----------------------------------------------------
 #
-# A character is stored in layers, not one blob: an *identity* (permanent physical traits) and
-# a *wardrobe* (the founding costume, which a later scene may change) and a one-phrase bearing.
-# `dna` — the compact string every downstream prompt, the QC gate and the whole UI read — is
-# then composed from those layers rather than stored beside them, so it can never drift from
-# the identity a director actually edits.
+# A character is stored in layers, not one blob: an *identity* (permanent physical traits — the
+# hard lock every frame must match) and a *wardrobe* (the costume, held consistent across the
+# film) and a one-phrase bearing. `dna` — the compact string every downstream prompt, the QC
+# gate and the whole UI read — is then composed from those layers rather than stored beside
+# them, so it can never drift from the identity a director actually edits. Keeping the two as
+# separate layers is what lets the prompt lock identity hardest and name wardrobe after it.
 
 # The identity fields, in the order they read as a description ("Nigerian man, early 40s, dark
 # brown skin…"). This is the one source of truth for that order; the story normaliser keys off
@@ -118,7 +119,11 @@ def keyframe_prompt(style: str, scene: dict, dna_blocks: list[str], environment:
         f"clearly readable, and identical to the rest of scene {scene.get('n','')} — same "
         f"location, same wardrobe, same light, same time of day. "
         f"{_intent(scene)}"
-        f"Match the reference sheets exactly: face, outfit, and style."
+        # Identity is the permanent layer and the hard lock — face, build, hair and skin must
+        # match the sheet exactly. Wardrobe and grade are held too, but they are named after
+        # identity, not lumped with it, so the model spends its fidelity on the face first.
+        f"Match the reference sheets: same face, build, hair and skin above all, then the same "
+        f"wardrobe and film-style grade."
     ).strip()
 
 
@@ -148,7 +153,10 @@ def video_prompt(style: str, scene: dict, dna_blocks: list[str], environment: st
         f"speed — NOT slow motion; candid behaviour with live secondary motion. "
         + (f"This shot exists to {why}; move the camera for that. " if why else "")
         + f"{_intent(scene)}{audio} "
-        f"Keep face, outfit, and style from the source image."
+        # Same hierarchy as the still: the source frame's identity is the thing that must not
+        # drift as it moves — face, build, hair, skin — with wardrobe and grade held after it.
+        f"Hold the identity from the source image above all — same face, build, hair and skin — "
+        f"and keep its wardrobe and film-style grade."
     ).strip()
 
 

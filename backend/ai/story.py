@@ -81,9 +81,9 @@ CHARACTERS. Do NOT write a character sheet prompt — the pipeline composes each
 identity fields on a fixed studio backdrop, so every character in the film shares one look and
 one background. Your job is to fill those fields precisely; they are what every frame of that
 character is built from. Split each character in two: IDENTITY is permanent physical truth
-(ethnicity, gender, age, build, skin, hair, eyes, distinguishing features) and never changes
-between scenes; WARDROBE is the founding costume they happen to wear on the sheet, and a later
-scene may dress them differently. Keep clothing out of identity and body out of wardrobe.
+(ethnicity, gender, age, build, skin, hair, eyes, distinguishing features) — the hard identity
+lock every frame of that character must match; WARDROBE is the costume they wear, held
+consistent across the whole film. Keep clothing out of identity and body out of wardrobe.
 
 Give a real spine: want, obstacle, escalation (therefore/but), a turn, a button.
 Write exactly the number of scenes the brief asks for, in the language the brief specifies.
